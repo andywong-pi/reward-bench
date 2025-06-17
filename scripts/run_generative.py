@@ -74,7 +74,7 @@ def get_args():
     )
     parser.add_argument("--num_gpus", type=int, default=1, help="number of gpus to use, for multi-node vllm")
     parser.add_argument("--vllm_gpu_util", type=float, default=0.9, help="gpu utilization for vllm")
-    # parser.add_argument("--vllm_max_seq_length", type=int, default=None, help="max sequence length for vllm")
+    parser.add_argument("--vllm_max_seq_length", type=int, default=None, help="max sequence length for vllm")
     parser.add_argument("--do_not_save", action="store_true", help="do not save results to hub (for debugging)")
     parser.add_argument(
         "--pref_sets", action="store_true", help="run on common preference sets instead of our custom eval set"
@@ -142,7 +142,7 @@ def main():
             trust_remote_code=args.trust_remote_code,
             tensor_parallel_size=args.num_gpus,
             gpu_memory_utilization=args.vllm_gpu_util,
-            # max_seq_length=args.vllm_max_seq_length,
+            max_model_len=args.vllm_max_seq_length,
         )
         tokenizer = AutoTokenizer.from_pretrained(args.model)
         if "Llama-3" in args.model or "llama3-8b" in args.model and "3.1" not in args.model:
@@ -173,8 +173,16 @@ def main():
         model_modifier = "gemini"
     elif "RISE-Judge" in args.model:
         model_modifier = "RISE-Judge"
+    ########################################################## Modify to accommodate for RRM
+    elif "RRM" in args.model:
+        model_modifier = "RRM"
+    ##########################################################
+    elif "helpsteer3" in args.model:
+        model_modifier = "helpsteer3"
     else:
         model_modifier = None
+
+    print(f"Using {model_modifier} model as model modifier")
 
     ############################
     # Load dataset
@@ -353,7 +361,17 @@ def main():
         logger.info("*** Inference done ***")
 
         answers = [o.outputs[0].text for o in outputs]
+
+        # print(f"prompt:{prompts[0]}")
+        # print(f"output:{outputs[0]}")
+        # print(f"answers:{answers[0]}")
+
         winners = [process_judgement(a, model_modifier) for a in answers]
+
+        # for answer, output, winner in zip(answers, outputs, winners):
+        #     print(f"output:{output.outputs[0].text}")
+        #     print(f"answer:{answer}")
+        #     print(f"winner:{winner}")
 
         def process_shuffled(win, shuffle):
             if shuffle:
