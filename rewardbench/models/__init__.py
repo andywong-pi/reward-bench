@@ -25,7 +25,7 @@ from transformers import (
 )
 
 from .armorm import ArmoRMPipeline
-from .beaver import BeaverCostPipeline, BeaverPipeline, LlamaForScore
+from .beaver import BeaverCostPipeline, BeaverPipeline #, LlamaForScore
 from .betterpairrm import BetterPairRMPipeline
 from .grm import GRewardModel, GRMPipeline
 from .inform import INFORMForSequenceClassification
@@ -35,7 +35,7 @@ from .openassistant import *  # noqa
 from .openbmb import LlamaRewardModel, OpenBMBPipeline
 from .pairrm import DebertaV2PairRM, PairRMPipeline
 from .pipeline import RewardBenchPipeline
-from .qrm import LlamaForRewardModelWithGating3, LlamaForRewardModelWithGating31
+# from .qrm import LlamaForRewardModelWithGating3, LlamaForRewardModelWithGating31
 from .shp import SHPPipeline
 from .slicpairpm import SlicPairPMPipeline
 from .starling import (
@@ -134,34 +134,34 @@ REWARD_MODEL_CONFIG = {
         "custom_dialogue": False,
         "model_type": "Seq. Classifier",
     },
-    "PKU-Alignment/beaver-7b-v1.0-reward": {
-        "model_builder": LlamaForScore.from_pretrained,
-        "pipeline_builder": BeaverPipeline,
-        "quantized": True,
-        "custom_dialogue": False,
-        "model_type": "Seq. Classifier",
-    },
-    "PKU-Alignment/beaver-7b-v1.0-cost": {
-        "model_builder": LlamaForScore.from_pretrained,
-        "pipeline_builder": BeaverCostPipeline,
-        "quantized": True,
-        "custom_dialogue": False,
-        "model_type": "Seq. Classifier",
-    },
-    "PKU-Alignment/beaver-7b-v2.0-reward": {
-        "model_builder": LlamaForScore.from_pretrained,
-        "pipeline_builder": BeaverPipeline,
-        "quantized": True,
-        "custom_dialogue": False,
-        "model_type": "Seq. Classifier",
-    },
-    "PKU-Alignment/beaver-7b-v2.0-cost": {
-        "model_builder": LlamaForScore.from_pretrained,
-        "pipeline_builder": BeaverCostPipeline,
-        "quantized": True,
-        "custom_dialogue": False,
-        "model_type": "Seq. Classifier",
-    },
+    # "PKU-Alignment/beaver-7b-v1.0-reward": {
+    #     "model_builder": LlamaForScore.from_pretrained,
+    #     "pipeline_builder": BeaverPipeline,
+    #     "quantized": True,
+    #     "custom_dialogue": False,
+    #     "model_type": "Seq. Classifier",
+    # },
+    # "PKU-Alignment/beaver-7b-v1.0-cost": {
+    #     "model_builder": LlamaForScore.from_pretrained,
+    #     "pipeline_builder": BeaverCostPipeline,
+    #     "quantized": True,
+    #     "custom_dialogue": False,
+    #     "model_type": "Seq. Classifier",
+    # },
+    # "PKU-Alignment/beaver-7b-v2.0-reward": {
+    #     "model_builder": LlamaForScore.from_pretrained,
+    #     "pipeline_builder": BeaverPipeline,
+    #     "quantized": True,
+    #     "custom_dialogue": False,
+    #     "model_type": "Seq. Classifier",
+    # },
+    # "PKU-Alignment/beaver-7b-v2.0-cost": {
+    #     "model_builder": LlamaForScore.from_pretrained,
+    #     "pipeline_builder": BeaverCostPipeline,
+    #     "quantized": True,
+    #     "custom_dialogue": False,
+    #     "model_type": "Seq. Classifier",
+    # },
     "RLHFlow/pair-preference-model-LLaMA3-8B": {
         "model_builder": AutoModelForCausalLM.from_pretrained,
         "pipeline_builder": SlicPairPMPipeline,
@@ -212,22 +212,22 @@ REWARD_MODEL_CONFIG = {
         "custom_dialogue": False,
         "model_type": "Seq. Classifier",
     },
-    "nicolinho/QRM-Llama3.1-8B": {
-        "model_builder": LlamaForRewardModelWithGating31.from_pretrained,
-        "pipeline_builder": RewardBenchPipeline,
-        "quantized": False,
-        "custom_dialogue": False,
-        "model_type": "Seq. Classifier",
-        "torch_dtype": torch.bfloat16,
-    },
-    "nicolinho/QRM-Llama3-8B": {
-        "model_builder": LlamaForRewardModelWithGating3.from_pretrained,
-        "pipeline_builder": RewardBenchPipeline,
-        "quantized": False,
-        "custom_dialogue": False,
-        "model_type": "Seq. Classifier",
-        "torch_dtype": torch.bfloat16,
-    },
+    # "nicolinho/QRM-Llama3.1-8B": {
+    #     "model_builder": LlamaForRewardModelWithGating31.from_pretrained,
+    #     "pipeline_builder": RewardBenchPipeline,
+    #     "quantized": False,
+    #     "custom_dialogue": False,
+    #     "model_type": "Seq. Classifier",
+    #     "torch_dtype": torch.bfloat16,
+    # },
+    # "nicolinho/QRM-Llama3-8B": {
+    #     "model_builder": LlamaForRewardModelWithGating3.from_pretrained,
+    #     "pipeline_builder": RewardBenchPipeline,
+    #     "quantized": False,
+    #     "custom_dialogue": False,
+    #     "model_type": "Seq. Classifier",
+    #     "torch_dtype": torch.bfloat16,
+    # },
     "Ray2333/GRM-Gemma2-2B-sftreg": {
         "model_builder": GRewardModel.from_pretrained,
         "pipeline_builder": GRMPipeline,

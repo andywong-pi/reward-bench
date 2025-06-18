@@ -1,0 +1,37 @@
+[project]
+name = "rewardbench"
+version = "0.1.0"
+description = "A project using reward-bench"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "accelerate",
+    "bitsandbytes",
+    "black",
+    "datasets",
+    "flake8>=6.0",
+    "fschat",
+    "huggingface_hub",
+    "hf_transfer",
+    "isort>=5.12.0",
+    "pandas",
+    "pytest",
+    "sentencepiece",
+    "tabulate",
+    "tokenizers",
+    "torch",
+    "tiktoken",
+    "transformers>=4.51.0",
+    "trl>=0.8.2",
+    "wandb",
+    "vllm>=0.9.1",
+    "openai",
+    "anthropic",
+    "google-generativeai",
+    "together",
+    "setuptools",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

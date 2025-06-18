@@ -45,6 +45,10 @@ EVAL_REPO = "allenai/reward-bench-results"  # data repo to upload results
 CORE_EVAL_SET_V2 = "allenai/reward-bench-2"
 EVAL_REPO_V2 = "allenai/reward-bench-2-results"  # data repo to upload results
 
+INF2_SETS = [
+    "/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
+]
+
 # get token from HF_TOKEN env variable, but if it doesn't exist pass none
 HF_TOKEN = os.getenv("HF_TOKEN", None)
 api = HfApi(token=HF_TOKEN)
@@ -296,7 +300,7 @@ def load_and_process_dataset(
 
 
 def load_eval_dataset(
-    core_set: bool = True,
+    eval_set: str = "core_set",
     custom_dialogue_formatting: bool = False,
     conv: Conversation = None,
     tokenizer: PreTrainedTokenizer = None,
@@ -323,28 +327,40 @@ def load_eval_dataset(
         dataset: loaded dataset with required properties.
         subsets: list of subsets for the corresponding samples in the dataset.
     """
-    if core_set:
-        raw_dataset = load_dataset(CORE_EVAL_SET, split="filtered")
-    else:
-        raw_dataset = load_dataset(EXTRA_PREF_SETS)
-        modified_datasets = []
+    match eval_set:
+        case "core_set":
+            raw_dataset = load_dataset(CORE_EVAL_SET, split="filtered")
+        case "inf2_sets":
+            datasets = []
+            for fname in INF2_SETS:
+                subset = fname.split("/")[-1].split(".")[0]
+                ds = load_dataset("json", data_files=fname, split="train")
+                ds = ds.add_column("subset", [subset] * len(ds))
+                datasets.append(ds)
+            raw_dataset = concatenate_datasets(datasets)
+        case "pref_sets":
+            raw_dataset = load_dataset(EXTRA_PREF_SETS)
+            modified_datasets = []
+            # Iterate over each subset in the DatasetDict
+            for subset_name, subdataset in raw_dataset.items():
+                # if subset column exists, move to subsubset (for pref sets)
+                if "subset" in subdataset.column_names:
+                    subdataset = subdataset.rename_column("subset", "subsubset")
 
-        # Iterate over each subset in the DatasetDict
-        for subset_name, subdataset in raw_dataset.items():
-            # if subset column exists, move to subsubset (for pref sets)
-            if "subset" in subdataset.column_names:
-                subdataset = subdataset.rename_column("subset", "subsubset")
+                # Add a new column 'subset' to the dataset with the subset name
+                subdataset = subdataset.add_column("subset", [subset_name] * len(subdataset))
 
-            # Add a new column 'subset' to the dataset with the subset name
-            subdataset = subdataset.add_column("subset", [subset_name] * len(subdataset))
+                # Append the modified dataset to the list
+                # remove pku_safer and pku_better from the dict, no longer part of the benchmark
+                if subset_name not in ["pku_safer", "pku_better"]:
+                    modified_datasets.append(subdataset)
 
-            # Append the modified dataset to the list
-            # remove pku_safer and pku_better from the dict, no longer part of the benchmark
-            if subset_name not in ["pku_safer", "pku_better"]:
-                modified_datasets.append(subdataset)
+            # Concatenate all the modified datasets into one dataset
+            raw_dataset = concatenate_datasets(modified_datasets)
+        case _:
+            raise ValueError(f"Invalid eval_set: {eval_set}")
 
-        # Concatenate all the modified datasets into one dataset
-        raw_dataset = concatenate_datasets(modified_datasets)
+        
 
     # Apply chat template
     if not custom_dialogue_formatting:
@@ -378,25 +394,32 @@ def load_eval_dataset(
         if logger is not None:
             logger.info("*** Preparing dataset with custom formatting ***")
 
-        def map_conversations(example, core_set=True):
-            if core_set:
-                example["text_chosen"] = [
-                    {"role": "user", "content": example["prompt"]},
-                    {"role": "assistant", "content": example["chosen"]},
-                ]
-                example["text_rejected"] = [
-                    {"role": "user", "content": example["prompt"]},
-                    {"role": "assistant", "content": example["rejected"]},
-                ]
-            else:
-                prompt = example["prompt"]
-                example["text_chosen"] = prompt + [{"role": "assistant", "content": example["chosen"]}]
-                example["text_rejected"] = prompt + [{"role": "assistant", "content": example["rejected"]}]
+        def map_conversations(example, eval_set):
+            match eval_set:
+                case "core_set":
+                    example["text_chosen"] = [
+                        {"role": "user", "content": example["prompt"]},
+                        {"role": "assistant", "content": example["chosen"]},
+                    ]
+                    example["text_rejected"] = [
+                        {"role": "user", "content": example["prompt"]},
+                        {"role": "assistant", "content": example["rejected"]},
+                    ]
+                case "pref_sets":
+                    prompt = example["prompt"]
+                    example["text_chosen"] = prompt + [{"role": "assistant", "content": example["chosen"]}]
+                    example["text_rejected"] = prompt + [{"role": "assistant", "content": example["rejected"]}]
+                case "inf2_sets":
+                    example["text_chosen"] = example["chosen"]
+                    example["text_rejected"] = example["rejected"]
+                case _:
+                    raise ValueError(f"Invalid eval_set: {eval_set}")
+
             return example
 
         dataset = raw_dataset.map(
             map_conversations,
-            fn_kwargs={"core_set": core_set},
+            fn_kwargs={"eval_set": eval_set},
             num_proc=8,
         )
 
@@ -421,115 +444,115 @@ def load_eval_dataset(
     return dataset, subsets
 
 
-def load_eval_dataset_multi(
-    core_set: bool = True,
-    dataset: str = None,  # alternate dataset
-    custom_dialogue_formatting: bool = False,
-    conv: Conversation = None,
-    tokenizer: PreTrainedTokenizer = None,
-    logger: logging.Logger = None,
-    keep_columns: List[str] = ["texts_chosen", "texts_rejected", "id"],
-    return_extra_data: bool = False,
-    max_turns: int = None,
-) -> tuple[Dataset, list[str]]:
-    """
-    Loads either the core eval set for RewardBench 2 or a user-passed dataset, for running generative models
+# def load_eval_dataset_multi(
+#     core_set: bool = True,
+#     dataset: str = None,  # alternate dataset
+#     custom_dialogue_formatting: bool = False,
+#     conv: Conversation = None,
+#     tokenizer: PreTrainedTokenizer = None,
+#     logger: logging.Logger = None,
+#     keep_columns: List[str] = ["texts_chosen", "texts_rejected", "id"],
+#     return_extra_data: bool = False,
+#     max_turns: int = None,
+# ) -> tuple[Dataset, list[str]]:
+#     """
+#     Loads either the core eval set for RewardBench 2 or a user-passed dataset, for running generative models
 
-    Args:
-        core_set: if True, load the core eval set for RewardBench 2.
-        custom_dialogue_formatting: if True, format the dialogue as needed for custom models (e.g. SHP and PairRM).
-        conv: fastchat conversation template.
-                If None (default) the passed tokenizer needs to have a usable chat template.
-        tokenizer: HuggingFace tokenizer to use. The tokenizer's chat template, if available, has precedence over conv.
-        logger: logger to use for logging. If None (default), no logging is done.
-        keep_columns: list of columns to keep in the dataset. Because of the intricacies of handling the Ties subset,
-                we keep the "subset" and "num_correct" columns for RB2.
-        return_extra_data: return extra metadata for expanded logging (mostly in CLI)
-        max_turns: maximum number of turns in the dialogue (usually even). If None (default), no filtering is done.
+#     Args:
+#         core_set: if True, load the core eval set for RewardBench 2.
+#         custom_dialogue_formatting: if True, format the dialogue as needed for custom models (e.g. SHP and PairRM).
+#         conv: fastchat conversation template.
+#                 If None (default) the passed tokenizer needs to have a usable chat template.
+#         tokenizer: HuggingFace tokenizer to use. The tokenizer's chat template, if available, has precedence over conv.
+#         logger: logger to use for logging. If None (default), no logging is done.
+#         keep_columns: list of columns to keep in the dataset. Because of the intricacies of handling the Ties subset,
+#                 we keep the "subset" and "num_correct" columns for RB2.
+#         return_extra_data: return extra metadata for expanded logging (mostly in CLI)
+#         max_turns: maximum number of turns in the dialogue (usually even). If None (default), no filtering is done.
 
-    Returns:
-        dataset: loaded dataset with required properties.
-        subsets: list of subsets for the corresponding samples in the dataset.
-    """
-    # consider making this force the -no-ties version of core eval set
-    raw_dataset = load_dataset(CORE_EVAL_SET_V2, split="test") if not dataset else load_dataset(dataset, split="test")
-    # Apply chat template
-    if not custom_dialogue_formatting:
-        usable_tokenizer = check_tokenizer_chat_template(tokenizer)
+#     Returns:
+#         dataset: loaded dataset with required properties.
+#         subsets: list of subsets for the corresponding samples in the dataset.
+#     """
+#     # consider making this force the -no-ties version of core eval set
+#     raw_dataset = load_dataset(CORE_EVAL_SET_V2, split="test") if not dataset else load_dataset(dataset, split="test")
+#     # Apply chat template
+#     if not custom_dialogue_formatting:
+#         usable_tokenizer = check_tokenizer_chat_template(tokenizer)
 
-        # assert either conv is passed or tokenizer has chat_template
-        assert conv is not None or usable_tokenizer
+#         # assert either conv is passed or tokenizer has chat_template
+#         assert conv is not None or usable_tokenizer
 
-        if usable_tokenizer:
-            if logger is not None:
-                logger.info("*** Preparing dataset with HF Transformers ***")
-            # docs https://huggingface.co/docs/transformers/main/en/chat_templating
-            dataset = raw_dataset.map(
-                prepare_dialogue_from_tokenizer,
-                fn_kwargs={"tokenizer": tokenizer},
-                num_proc=8,
-                load_from_cache_file=False,
-            )
+#         if usable_tokenizer:
+#             if logger is not None:
+#                 logger.info("*** Preparing dataset with HF Transformers ***")
+#             # docs https://huggingface.co/docs/transformers/main/en/chat_templating
+#             dataset = raw_dataset.map(
+#                 prepare_dialogue_from_tokenizer,
+#                 fn_kwargs={"tokenizer": tokenizer},
+#                 num_proc=8,
+#                 load_from_cache_file=False,
+#             )
 
-        # else use FastChat to get chat template
-        else:
-            if logger is not None:
-                logger.info("*** Preparing dataset with FastChat ***")
-            dataset = raw_dataset.map(
-                prepare_dialogue,
-                fn_kwargs={"dialogue_template": conv},
-                num_proc=8,  # using >1 process causes issues with re-assigning prompt in example
-                load_from_cache_file=False,
-            )
-    else:
-        if logger is not None:
-            logger.info("*** Preparing dataset with custom formatting ***")
+#         # else use FastChat to get chat template
+#         else:
+#             if logger is not None:
+#                 logger.info("*** Preparing dataset with FastChat ***")
+#             dataset = raw_dataset.map(
+#                 prepare_dialogue,
+#                 fn_kwargs={"dialogue_template": conv},
+#                 num_proc=8,  # using >1 process causes issues with re-assigning prompt in example
+#                 load_from_cache_file=False,
+#             )
+#     else:
+#         if logger is not None:
+#             logger.info("*** Preparing dataset with custom formatting ***")
 
-        def map_conversations(example, core_set=True):
-            chosen_texts = []
-            for chosen_response in example["chosen"]:
-                chosen_texts.append(
-                    [
-                        {"role": "user", "content": example["prompt"]},
-                        {"role": "assistant", "content": chosen_response},
-                    ]
-                )
-            example["texts_chosen"] = chosen_texts
-            rejected_texts = []
-            # multiple rejected responses
-            for rejected_response in example["rejected"]:
-                rejected_texts.append(
-                    [
-                        {"role": "user", "content": example["prompt"]},
-                        {"role": "assistant", "content": rejected_response},
-                    ]
-                )
-            example["texts_rejected"] = rejected_texts
-            return example
+#         def map_conversations(example, core_set=True):
+#             chosen_texts = []
+#             for chosen_response in example["chosen"]:
+#                 chosen_texts.append(
+#                     [
+#                         {"role": "user", "content": example["prompt"]},
+#                         {"role": "assistant", "content": chosen_response},
+#                     ]
+#                 )
+#             example["texts_chosen"] = chosen_texts
+#             rejected_texts = []
+#             # multiple rejected responses
+#             for rejected_response in example["rejected"]:
+#                 rejected_texts.append(
+#                     [
+#                         {"role": "user", "content": example["prompt"]},
+#                         {"role": "assistant", "content": rejected_response},
+#                     ]
+#                 )
+#             example["texts_rejected"] = rejected_texts
+#             return example
 
-        dataset = raw_dataset.map(
-            map_conversations,
-            fn_kwargs={"core_set": core_set},
-            num_proc=8,
-        )
-        logger.info(f"Dataset columns: {dataset.column_names}")
+#         dataset = raw_dataset.map(
+#             map_conversations,
+#             fn_kwargs={"core_set": core_set},
+#             num_proc=8,
+#         )
+#         logger.info(f"Dataset columns: {dataset.column_names}")
 
-    if max_turns is not None:
-        assert max_turns > 0, "max_turns must be greater than 0"
+#     if max_turns is not None:
+#         assert max_turns > 0, "max_turns must be greater than 0"
 
-        # filter long answers (MT Bench prompt as 1 or 2 turn examples)
-        def filter_long_turns(batch):
-            return len(batch["texts_chosen"][0]) <= max_turns
+#         # filter long answers (MT Bench prompt as 1 or 2 turn examples)
+#         def filter_long_turns(batch):
+#             return len(batch["texts_chosen"][0]) <= max_turns
 
-        dataset = dataset.filter(filter_long_turns)
+#         dataset = dataset.filter(filter_long_turns)
 
-    # take column subset from dataset
+#     # take column subset from dataset
 
-    # remove columns if set and not custom_dialogue_formatting
-    all_cols = dataset.column_names
-    dataset = dataset.remove_columns([c for c in all_cols if c not in keep_columns])
+#     # remove columns if set and not custom_dialogue_formatting
+#     all_cols = dataset.column_names
+#     dataset = dataset.remove_columns([c for c in all_cols if c not in keep_columns])
 
-    return dataset
+#     return dataset
 
 
 def reroll_and_score_dataset(dataset, total_completions, cols_to_combine=["text", "scores"]):
@@ -1041,7 +1064,7 @@ def process_single_model(dataset):
         sample_type, prompt_id_str = sample["id"].split(":")
         prompt_id = int(prompt_id_str)
 
-        # Each score position i is “correct” if i < num_correct
+        # Each score position i is "correct" if i < num_correct
         for i, raw_score in enumerate(sample["scores"]):
             score = raw_score[0] if isinstance(raw_score, list) else raw_score
             grouped_samples[(sample_type, prompt_id)].append((i < sample["num_correct"], score))
