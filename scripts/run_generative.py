@@ -173,6 +173,12 @@ def main():
         model_modifier = "gemini"
     elif "RISE-Judge" in args.model:
         model_modifier = "RISE-Judge"
+    ########################################################## Modify to accommodate for RRM
+    elif "RRM" in args.model:
+        model_modifier = "RRM"
+    ########################################################## Modify to accommodate for helpsteer3
+    elif "helpsteer3" in args.model:
+        model_modifier = "helpsteer3"
     else:
         model_modifier = None
 

@@ -177,6 +177,13 @@ def main():
         model_modifier = "gemini"
     elif "RISE-Judge" in args.model:
         model_modifier = "RISE-Judge"
+    ########################################################## Modify to accommodate for RRM
+    elif "RRM" in args.model:
+        model_modifier = "RRM"
+    ########################################################## Modify to accommodate for helpsteer3
+    elif "helpsteer3" in args.model:
+        model_modifier = "helpsteer3"
+    ##########################################################
     else:
         model_modifier = None
 
@@ -301,6 +308,11 @@ def main():
             answer_a = batch["text_chosen"]
             answer_b = batch["text_rejected"]
 
+            if mult_turn and args.eval_set == "inf2_sets":
+                prompt = tokenizer.apply_chat_template(batch["text_chosen"][:-1], tokenize=False, add_generation_prompt=True)
+                answer_a = batch["text_chosen"][-2:]
+                answer_b = batch["text_rejected"][-2:]
+
             # shuffle a and b randomly for position bias
             is_shuffled = np.random.rand() > 0.5
             if is_shuffled:
@@ -331,6 +343,7 @@ def main():
                 # so we need to tokenize without adding special tokens
                 tokenized_prompt = tokenizer(prompt, add_special_tokens=False, return_length=True)
                 prompt_ids = tokenized_prompt["input_ids"]
+
             batch["text"] = prompt
             batch["is_shuffled"] = is_shuffled
             batch["prompt_ids"] = prompt_ids

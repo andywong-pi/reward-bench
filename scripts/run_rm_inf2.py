@@ -64,7 +64,11 @@ def get_args():
     parser.add_argument("--batch_size", type=int, default=64, help="batch size for inference")
     parser.add_argument("--max_length", type=int, default=2048, help="Max length of RM inputs (passed to pipeline)")
     parser.add_argument(
-        "--pref_sets", action="store_true", help="run on common preference sets instead of our custom eval set"
+        "--eval_set",
+        type=str,
+        choices=["core_set", "pref_sets", "inf2_sets"],
+        default="core_set",
+        help="which evaluation set to use: 'core_set', 'pref_sets', or 'inf2_sets'"
     )
     parser.add_argument(
         "--debug", action="store_true", help="run on common preference sets instead of our custom eval set"
@@ -173,16 +177,40 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=args.trust_remote_code)
     if not custom_dialogue:  # not needed for PairRM / SteamSHP
         tokenizer.truncation_side = "left"  # copied from Starling, but few samples are above context length
+
     dataset, subsets = load_eval_dataset(
-        eval_set=not args.pref_sets,
-        conv=conv,
-        custom_dialogue_formatting=custom_dialogue,
+        eval_set=args.eval_set,
+        conv=get_conv_template("raw"),  # not used in this script (handled later)
+        custom_dialogue_formatting=True,  # handle formatting later
         tokenizer=tokenizer,
         logger=logger,
         keep_columns=["text_chosen", "text_rejected", "id"],
+        max_turns=4, # TODO: may want to drop this for inf2_set
     )
 
-    import pdb; pdb.set_trace()
+    def apply_chat_templates(example, tokenizer):
+        """
+        Applies the tokenizer's chat template to both 'chosen' and 'rejected' inputs 
+        in the given example dictionary.
+
+        Parameters:
+            example (dict): A dictionary containing 'chosen' and 'rejected' chat inputs.
+            tokenizer (object): A tokenizer with an `apply_chat_template` method.
+
+        Returns:
+            dict: The example dictionary updated with 'text_chosen' and 'text_rejected' keys.
+        """
+        example["text_chosen"] = tokenizer.apply_chat_template(
+            example["text_chosen"],
+            tokenize=False,
+        )
+        example["text_rejected"] = tokenizer.apply_chat_template(
+            example["text_rejected"],
+            tokenize=False,
+        )
+        return example
+
+    dataset = dataset.map(lambda x: apply_chat_templates(x, tokenizer))
 
     # copy id for saving, then remove
     ids = dataset["id"]
@@ -251,6 +279,7 @@ def main():
     ############################
     # if using HF pipeline, can pass entire dataset and get results
     # first, handle custom pipelines that we must batch normally
+
     if pipeline_builder == pipeline:
         logger.info("*** Running forward pass via built in pipeline abstraction ***")
         # this setup can be optimized slightly with one pipeline call
@@ -363,11 +392,6 @@ def main():
         num_total = len(subset_dataset["results"])
         print(f"{subset}: {num_correct}/{num_total} ({num_correct/num_total})")
         results_grouped[subset] = num_correct / num_total
-
-    # log leaderboard aggregated results
-    if not args.pref_sets:
-        results_leaderboard = calculate_scores_per_section(EXAMPLE_COUNTS, SUBSET_MAPPING, results_grouped)
-        print(results_leaderboard)
 
     ############################
     # Upload results to hub

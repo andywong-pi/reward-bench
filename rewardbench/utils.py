@@ -360,8 +360,6 @@ def load_eval_dataset(
         case _:
             raise ValueError(f"Invalid eval_set: {eval_set}")
 
-        
-
     # Apply chat template
     if not custom_dialogue_formatting:
         usable_tokenizer = check_tokenizer_chat_template(tokenizer)
@@ -373,6 +371,7 @@ def load_eval_dataset(
             if logger is not None:
                 logger.info("*** Preparing dataset with HF Transformers ***")
             # docs https://huggingface.co/docs/transformers/main/en/chat_templating
+
             dataset = raw_dataset.map(
                 prepare_dialogue_from_tokenizer,
                 fn_kwargs={"tokenizer": tokenizer},
@@ -827,7 +826,6 @@ def load_bon_dataset(
     dataset = dataset.remove_columns(remove_columns)
 
     return dataset
-
 
 def prepare_dialogue_from_tokenizer(
     example: Dict[str, Any],
