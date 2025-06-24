@@ -445,8 +445,8 @@ def format_judge_answers(question, answer_a, answer_b, multi_turn=False, model_m
                 Response_1=answer_a[1]["content"],
                 Response_2=answer_b[1]["content"],
             )
-    ########################################################## Modify to accommodate for helpsteer3
-    elif model_modifier == "helpsteer3":
+    ########################################################## Modify to accommodate for helpsteer3 or inf2
+    elif model_modifier == "helpsteer3" or model_modifier == "inf2":
         # print(f"helpsteer3 model zw")
         # if multi_turn:
         #     raise ValueError("helpsteer3 prompts do not support multi-turn prompts")

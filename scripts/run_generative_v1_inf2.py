@@ -183,6 +183,9 @@ def main():
     ########################################################## Modify to accommodate for helpsteer3
     elif "helpsteer3" in args.model:
         model_modifier = "helpsteer3"
+    ########################################################## Modify to accommodate for inf2
+    elif "inf2" in args.model:
+        model_modifier = "inf2"
     ##########################################################
     else:
         model_modifier = None
