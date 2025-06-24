@@ -65,6 +65,12 @@ def get_args():
         required=True,
         help="name of model to use",
     )
+    parser.add_argument(
+        "--model_modifier",
+        type=str,
+        default=None,
+        help="model modifier to use",
+    )
     parser.add_argument("--chat_template", type=str, default=None, help="fastchat chat template (optional)")
     parser.add_argument(
         "--trust_remote_code", action="store_true", default=False, help="directly load model instead of pipeline"
@@ -164,28 +170,30 @@ def main():
 
     # handle off-case models
     # use different prompt for prometheus/gemini models
-    if "prometheus" in args.model:
+    if "prometheus" in args.model or args.model_modifier == "prometheus":
         model_modifier = "prometheus"
-    elif "Con-J" in args.model:
+    elif "Con-J" in args.model or args.model_modifier == "Con-J":
         model_modifier = "Con-J"
-    elif "OffsetBias" in args.model:
+    elif "OffsetBias" in args.model or args.model_modifier == "offsetbias":
         model_modifier = "offsetbias"
-    elif "Atla" in args.model:
+    elif "Atla" in args.model or args.model_modifier == "Atla":
         logger.info("Using ATLA model")
         model_modifier = "Atla"
-    elif "gemini" in args.model:
+    elif "gemini" in args.model or args.model_modifier == "gemini":
         model_modifier = "gemini"
-    elif "RISE-Judge" in args.model:
+    elif "RISE-Judge" in args.model or args.model_modifier == "RISE-Judge":
         model_modifier = "RISE-Judge"
     ########################################################## Modify to accommodate for RRM
-    elif "RRM" in args.model:
+    elif "RRM" in args.model or args.model_modifier == "RRM":
         model_modifier = "RRM"
     ########################################################## Modify to accommodate for helpsteer3
-    elif "helpsteer3" in args.model:
+    elif "helpsteer3" in args.model or args.model_modifier == "helpsteer3":
         model_modifier = "helpsteer3"
     ########################################################## Modify to accommodate for inf2
     elif "inf2" in args.model:
         model_modifier = "inf2"
+    elif "generic_conversational_intellegence" in args.model or args.model_modifier == "generic_conversational_intellegence":
+        model_modifier = "generic_conversational_intellegence"
     ##########################################################
     else:
         model_modifier = None
