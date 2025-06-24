@@ -385,68 +385,139 @@ HELPSTEER3_USER_PROMPT = (
     "You don't need to give a ranking score if only one response is provided.\n\n"
 )
 
+# GENERIC_CONVERSATIONAL_INTELLIGENCE_SYSTEM_PROMPT = (
+#     "You are a skilled little expert at scoring responses. "
+#     "You should evaluate given responses based on the given judging criteria. "
+#     "Given the context of the conversation (the last turn is the User's query) and one or two responses from the Assistant, "
+#     "you need to refer to the [Helpfulness Scoring Guidelines] to score each individual response. "
+#     "If there are two responses, you need to also give a ranking score based on the [Ranking Scoring Guidelines]. "
+#     "Before scoring, please analyze step by step. "
+#     "Your scoring needs to be as strict as possible.\n"
+#     "[Helpfulness Scoring Guidelines]\n"
+#     "When evaluating Helpfulness, consider the following factors:\n"
+#     "- Correctness/Completeness: Is the response accurate and complete?\n"
+#     "- Coherence/Clarity: Is the response clear, coherent, and easy to understand?\n"
+#     "- Instruction following: Does the response follow the instructions and fulfill the user's request?\n"
+#     "- Relevance: Is the response relevant to the user's query/input?\n"
+#     "- Level of Detail and Creativity: Does the response provide enough detail without being too verbose? "
+#     "Does it show creativity but not hallucinations?\n"
+#     "**Score 5: Extremely Helpful**\n"
+#     "- The response is extremely helpful and completely aligned with the spirit of what the prompt was asking for.\n"
+#     "- It accurately acts on the user's request, without unnecessary information.\n"
+#     "- If a user request is not possible/in line with desired model behavior, a helpful response provides useful context and rationale.\n"
+#     "**Score 4: Mostly Helpful**\n"
+#     "- The response is mostly helpful and mainly aligned with what the user was looking for.\n"
+#     "- There is still some room for improvement, but the response is generally useful.\n"
+#     "**Score 3: Partially Helpful**\n"
+#     "- The response is partially helpful but misses the overall goal of the user's query/input in some way.\n"
+#     "- The response did not fully satisfy what the user was looking for.\n"
+#     "**Score 2: Borderline Unhelpful**\n"
+#     "- The response is borderline unhelpful and mostly does not capture what the user was looking for.\n"
+#     "- However, it is still usable and helpful in a small way.\n"
+#     "**Score 1: Not Helpful**\n"
+#     "- The response is not useful or helpful at all.\n"
+#     "- The response completely missed the essence of what the user wanted.\n"
+#     "[Ranking Scoring Guidelines]\n"
+#     "Ranking score is used to rank the two responses based on their helpfulness. "
+#     "Even if you give the same individual helpfulness score for both responses, you need to differentiate them strictly. "
+#     "The ranking score is a number between 1 and 6, where:\n"
+#     "1 = Response 1 is much better than Response 2\n"
+#     "2 = Response 1 is better than Response 2\n"
+#     "3 = Response 1 is slightly better than Response 2\n"
+#     "4 = Response 2 is slightly better than Response 1\n"
+#     "5 = Response 2 is better than Response 1\n"
+#     "6 = Response 2 is much better than Response 1\n"
+# )
+# GENERIC_CONVERSATIONAL_INTELLIGENCE_USER_PROMPT = (
+#     "#### Conversation Context ####\n"
+#     "{Query}\n"
+#     "#### Responses to be Scored ####\n"
+#     "Response 1:\n{Response_1}\nResponse 2:\n{Response_2}\n\n"
+#     "#### Output Format Requirements ####\n"
+#     "First give your analysis on each responses in the format of:\n"
+#     "[The Begin of Analysis on Response i]\n"
+#     "Analysis on the i-th response\n"
+#     "[The End of Analysis on Response i]\n"
+#     "Then give the scores of each response in order, separate by comma in the boxed, adhering this format:\n"
+#     "[The Begin of Individual Scores]\n"
+#     "\\boxed{{x, y}} if there exists 2 responses\n"
+#     "[The End of Individual Scores]\n"
+#     "If there are two responses, give the relative ranking score in the format of:\n"
+#     "[The Begin of Ranking Score]\n"
+#     "\\boxed{{z}}\n"
+#     "[The End of Ranking Score]\n"
+#     "You don't need to give a ranking score if only one response is provided.\n\n"
+# )
+
+# v1
 GENERIC_CONVERSATIONAL_INTELLIGENCE_SYSTEM_PROMPT = (
-    "You are a skilled little expert at scoring responses. "
-    "You should evaluate given responses based on the given judging criteria. "
-    "Given the context of the conversation (the last turn is the User's query) and one or two responses from the Assistant, "
-    "you need to refer to the [Helpfulness Scoring Guidelines] to score each individual response. "
-    "If there are two responses, you need to also give a ranking score based on the [Ranking Scoring Guidelines]. "
-    "Before scoring, please analyze step by step. "
-    "Your scoring needs to be as strict as possible.\n"
-    "[Helpfulness Scoring Guidelines]\n"
-    "When evaluating Helpfulness, consider the following factors:\n"
-    "- Correctness/Completeness: Is the response accurate and complete?\n"
-    "- Coherence/Clarity: Is the response clear, coherent, and easy to understand?\n"
-    "- Instruction following: Does the response follow the instructions and fulfill the user's request?\n"
-    "- Relevance: Is the response relevant to the user's query/input?\n"
-    "- Level of Detail and Creativity: Does the response provide enough detail without being too verbose? "
-    "Does it show creativity but not hallucinations?\n"
-    "**Score 5: Extremely Helpful**\n"
-    "- The response is extremely helpful and completely aligned with the spirit of what the prompt was asking for.\n"
-    "- It accurately acts on the user's request, without unnecessary information.\n"
-    "- If a user request is not possible/in line with desired model behavior, a helpful response provides useful context and rationale.\n"
-    "**Score 4: Mostly Helpful**\n"
-    "- The response is mostly helpful and mainly aligned with what the user was looking for.\n"
-    "- There is still some room for improvement, but the response is generally useful.\n"
-    "**Score 3: Partially Helpful**\n"
-    "- The response is partially helpful but misses the overall goal of the user's query/input in some way.\n"
-    "- The response did not fully satisfy what the user was looking for.\n"
-    "**Score 2: Borderline Unhelpful**\n"
-    "- The response is borderline unhelpful and mostly does not capture what the user was looking for.\n"
-    "- However, it is still usable and helpful in a small way.\n"
-    "**Score 1: Not Helpful**\n"
-    "- The response is not useful or helpful at all.\n"
-    "- The response completely missed the essence of what the user wanted.\n"
-    "[Ranking Scoring Guidelines]\n"
-    "Ranking score is used to rank the two responses based on their helpfulness. "
-    "Even if you give the same individual helpfulness score for both responses, you need to differentiate them strictly. "
-    "The ranking score is a number between 1 and 6, where:\n"
-    "1 = Response 1 is much better than Response 2\n"
-    "2 = Response 1 is better than Response 2\n"
-    "3 = Response 1 is slightly better than Response 2\n"
-    "4 = Response 2 is slightly better than Response 1\n"
-    "5 = Response 2 is better than Response 1\n"
-    "6 = Response 2 is much better than Response 1\n"
+    "You are a skilled little expert at scoring responses. "  
+    "You should evaluate given responses based on the given judging criteria. "  
+    "Given the context of the conversation (the last turn is the User's query) and one or two responses from the Assistant, "  
+    "you need to refer to the [Conversational Intelligence Scoring Guidelines] to score each individual response. "  
+    "If there are two responses, you need to also give a ranking score based on the [Ranking Scoring Guidelines]. "  
+    "Before scoring, please analyze step by step. "  
+    "Your scoring needs to be as strict as possible.\n"  
+
+    "[Conversational Intelligence Scoring Guidelines]\n"  
+    "When evaluating Conversational Intelligence (High EQ), consider the following factors:\n"  
+    "- **Empathy & Emotional Awareness**: Does the response acknowledge the user’s emotions, tone, or underlying concerns?\n"  
+    "- **Natural Flow & Engagement**: Does the response feel organic, fluid, and human-like in dialogue?\n"  
+    "- **Adaptability & Context Sensitivity**: Does it adjust tone/style based on the conversation’s emotional or situational needs?\n"  
+    "- **Active Listening & Validation**: Does it reflect understanding (e.g., paraphrasing, validating feelings)?\n"  
+    "- **Positive Reinforcement & Support**: Does it encourage, uplift, or guide the user constructively?\n"  
+
+    "**Score 5: Exceptional EQ**\n"  
+    "- The response excels in emotional intelligence, demonstrating deep empathy, nuanced understanding, and seamless conversational flow.\n"  
+    "- It adapts perfectly to the user’s tone, validates emotions, and adds meaningful value.\n"  
+
+    "**Score 4: Strong EQ**\n"  
+    "- The response shows clear empathy and engagement but may lack slight finesse or depth in emotional nuance.\n"  
+    "- Still highly effective and human-like.\n"  
+
+    "**Score 3: Moderate EQ**\n"  
+    "- The response is somewhat emotionally aware but may feel generic, slightly robotic, or miss subtle cues.\n"  
+
+    "**Score 2: Low EQ**\n"  
+    "- The response struggles to connect emotionally, feeling detached, overly scripted, or tone-deaf to context.\n"  
+
+    "**Score 1: Lacks EQ**\n"  
+    "- The response ignores emotional cues, feels cold/mechanical, or worsens the interaction.\n"  
+
+    "[Ranking Scoring Guidelines]\n"  
+    "Ranking score is used to rank the two responses based on their conversational intelligence. "  
+    "Even if you give the same individual EQ score for both responses, you need to differentiate them strictly. "  
+    "The ranking score is a number between 1 and 6, where:\n"  
+    "1 = Response 1 is much better than Response 2\n"  
+    "2 = Response 1 is better than Response 2\n"  
+    "3 = Response 1 is slightly better than Response 2\n"  
+    "4 = Response 2 is slightly better than Response 1\n"  
+    "5 = Response 2 is better than Response 1\n"  
+    "6 = Response 2 is much better than Response 1\n"  
 )
 GENERIC_CONVERSATIONAL_INTELLIGENCE_USER_PROMPT = (
-    "#### Conversation Context ####\n"
-    "{Query}\n"
-    "#### Responses to be Scored ####\n"
-    "Response 1:\n{Response_1}\nResponse 2:\n{Response_2}\n\n"
-    "#### Output Format Requirements ####\n"
-    "First give your analysis on each responses in the format of:\n"
-    "[The Begin of Analysis on Response i]\n"
-    "Analysis on the i-th response\n"
-    "[The End of Analysis on Response i]\n"
-    "Then give the scores of each response in order, separate by comma in the boxed, adhering this format:\n"
-    "[The Begin of Individual Scores]\n"
-    "\\boxed{{x, y}} if there exists 2 responses\n"
-    "[The End of Individual Scores]\n"
-    "If there are two responses, give the relative ranking score in the format of:\n"
-    "[The Begin of Ranking Score]\n"
-    "\\boxed{{z}}\n"
-    "[The End of Ranking Score]\n"
-    "You don't need to give a ranking score if only one response is provided.\n\n"
+    "#### Conversation Context ####\n"  
+    "{Query}\n"  
+    "#### Responses to be Scored ####\n"  
+    "Response 1:\n{Response_1}\nResponse 2:\n{Response_2}\n\n"  
+
+    "#### Output Format Requirements ####\n"  
+    "First give your analysis on each response in the format of:\n"  
+    "[The Begin of Analysis on Response i]\n"  
+    "Analysis on the i-th response\n"  
+    "[The End of Analysis on Response i]\n"  
+
+    "Then give the scores of each response in order, separate by comma in the boxed, adhering to this format:\n"  
+    "[The Begin of Individual Scores]\n"  
+    "\boxed{{x, y}} if there exists 2 responses\n"  
+    "[The End of Individual Scores]\n"  
+
+    "If there are two responses, give the relative ranking score in the format of:\n"  
+    "[The Begin of Ranking Score]\n"  
+    "\boxed{{z}}\n"  
+    "[The End of Ranking Score]\n"  
+
+    "You don't need to give a ranking score if only one response is provided.\n\n"  
 )
 
 # format with prompt_template.format(question=question, answer_a=answer_a, answer_b=answer_b)
@@ -509,8 +580,8 @@ def format_judge_answers(question, answer_a, answer_b, multi_turn=False, model_m
                 Response_1=answer_a[1]["content"],
                 Response_2=answer_b[1]["content"],
             )
-    ########################################################## Modify to accommodate for helpsteer3 or inf2
-    elif model_modifier == "helpsteer3" or model_modifier == "inf2":
+    ########################################################## Modify to accommodate for helpsteer3
+    elif model_modifier == "helpsteer3":
         # print(f"helpsteer3 model zw")
         # if multi_turn:
         #     raise ValueError("helpsteer3 prompts do not support multi-turn prompts")
@@ -697,6 +768,25 @@ def process_judgement(judgment, model_modifier):
             return "error"
     ########################################################## Modify to accommodate for helpsteer3
     elif model_modifier == "helpsteer3":
+        # Extract content between [The Begin of Ranking Score] and [The End of Ranking Score]
+        ranking_score_section = re.search(r'\[The Begin of Ranking Score\](.*?)\[The End of Ranking Score\]', judgment, re.DOTALL)
+        if ranking_score_section:
+            # Find the number inside \boxed{}
+            boxed_match = re.search(r'\\boxed\{(-?\d+)\}', ranking_score_section.group(1))
+            if boxed_match:
+                score = int(boxed_match.group(1))
+                if score <= 3: # 3 is the threshold for helpsteer3
+                    return "A"
+                elif score > 3: # 3 is the threshold for helpsteer3
+                    return "B"
+                else:
+                    return "error"
+            else:
+                return "error" # no boxed score found in the Ranking Score section
+        else:
+            return "error" # Ranking Score section not found
+    ########################################################## Modify to accommodate for generic_conversational_intellegence
+    elif model_modifier == "generic_conversational_intellegence":
         # Extract content between [The Begin of Ranking Score] and [The End of Ranking Score]
         ranking_score_section = re.search(r'\[The Begin of Ranking Score\](.*?)\[The End of Ranking Score\]', judgment, re.DOTALL)
         if ranking_score_section:

@@ -65,6 +65,7 @@ def get_args():
         required=True,
         help="name of model to use",
     )
+    parser.add_argument("--model_modifier", type=str, default=None, help="model_modifier (optional)")
     parser.add_argument("--chat_template", type=str, default=None, help="fastchat chat template (optional)")
     parser.add_argument(
         "--trust_remote_code", action="store_true", default=False, help="directly load model instead of pipeline"
@@ -177,10 +178,12 @@ def main():
     elif "RRM" in args.model:
         model_modifier = "RRM"
     ########################################################## Modify to accommodate for helpsteer3
-    elif "helpsteer3" in args.model:
+    elif "helpsteer3" in args.model or args.model_modifier == "helpsteer3":
         model_modifier = "helpsteer3"
     else:
         model_modifier = None
+
+    print(f"model_modifier: {model_modifier}")
 
     ############################
     # Load dataset

@@ -189,9 +189,7 @@ def main():
     ########################################################## Modify to accommodate for helpsteer3
     elif "helpsteer3" in args.model or args.model_modifier == "helpsteer3":
         model_modifier = "helpsteer3"
-    ########################################################## Modify to accommodate for inf2
-    elif "inf2" in args.model:
-        model_modifier = "inf2"
+    ########################################################## Modify to accommodate for generic_conversational_intellegence
     elif "generic_conversational_intellegence" in args.model or args.model_modifier == "generic_conversational_intellegence":
         model_modifier = "generic_conversational_intellegence"
     ##########################################################
@@ -310,7 +308,6 @@ def main():
         ############################
         # Run model weights with vllm
         ############################
-
         def format_judgements(batch, optional_chat_template=None):
             prompt_ids = []  # Prevent crash if it's unused
             # TODO expand this to include fastchat chat templates if needed
