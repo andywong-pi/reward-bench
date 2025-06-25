@@ -30,6 +30,7 @@ from fastchat.conversation import get_conv_template
 from google.generativeai.types import HarmBlockThreshold, HarmCategory
 from openai import OpenAI
 from together import Together
+from typing import Optional
 
 # normalize OpenAI exception names for compatibility with different SDK versions
 APIError = getattr(openai, "APIError", Exception)
@@ -317,7 +318,7 @@ RRM_USER_PROMPT = """## Query
 {Response_1}
 ### Assistant 2
 {Response_2}
-## Analysis Let’s analyze this step by step and decide which assistant is better, and then
+## Analysis Let's analyze this step by step and decide which assistant is better, and then
 answer \\boxed{{Assistant 1}} or \\boxed{{Assistant 2}}."""
 
 
@@ -383,6 +384,80 @@ HELPSTEER3_USER_PROMPT = (
     "\\boxed{{z}}\n"
     "[The End of Ranking Score]\n"
     "You don't need to give a ranking score if only one response is provided.\n\n"
+)
+
+HELPSTEER3_PRINCIPLES_SYSTEM_PROMPT = (
+    "You are a skilled little expert at scoring responses. "
+    "You should evaluate given responses based on the given judging criteria.\n"
+    "Given the context of the conversation (the last turn is the User's query) and two responses from the Assistant, "
+    "you need to refer to the [General Scoring Guidelines] to score each individual response. "
+    "Based on the general scoring guidelines, state potential other specific criteria to the query, "
+    "the weights of different criteria, and then you need to also give a ranking score based on the [Ranking Scoring Guidelines].\n"
+    "Before scoring, please analyze step by step. "
+    "Your scoring needs to be as strict as possible.\n"
+    "[General Scoring Guideline]\n"
+    "When evaluating individual responses, consider the following criteria and other criteria that are specific to the query and the context:\n"
+    "- Correctness/Completeness: Is the response accurate and complete?\n"
+    "- Coherence/Clarity: Is the response clear, coherent, and easy to understand?\n"
+    "- Instruction following: Does the response follow the instructions and fulfill the user's request?\n"
+    "- Relevance: Is the response relevant to the user's query/input, with information closely aligned with the topic.?\n"
+    "- Level of Detail and Creativity: Does the response provide enough detail without being too verbose? "
+    "Does it show creativity but not hallucinations?\n"
+    "**Score 5: Excellent Response**\n"
+    "- The response is extremely helpful and completely aligned with the spirit of what the prompt was asking for.\n"
+    "- It accurately acts on the user's request, without unnecessary information.\n"
+    "- If a user request is not possible/in line with desired model behavior, a helpful response provides useful context and rationale.\n"
+    "**Score 4: Good Response**\n"
+    "- The response is mostly helpful and mainly aligned with what the user was looking for.\n"
+    "- There is still some room for improvement, but the response is generally useful.\n"
+    "**Score 3: Fair Response**\n"
+    "- The response is partially helpful but misses the overall goal of the user's query/input in some way.\n"
+    "- The response did not fully satisfy what the user was looking for.\n"
+    "**Score 2: Poor Response**\n"
+    "- The response is borderline unhelpful and mostly does not capture what the user was looking for.\n"
+    "- However, it is still usable and helpful in a small way.\n"
+    "**Score 1: Bad Response**\n"
+    "- The response is not useful or helpful at all.\n"
+    "- The response completely missed the essence of what the user wanted.\n"
+    "[Ranking Scoring Guidelines]\n"
+    "Ranking score is used to rank the two responses based on their quality. "
+    "Even if you give the same individual score for both responses, you need to differentiate them strictly. "
+    "The ranking score is a number between 1 and 6, where:\n"
+    "1 = Response 1 is much better than Response 2\n"
+    "2 = Response 1 is better than Response 2\n"
+    "3 = Response 1 is slightly better than Response 2\n"
+    "4 = Response 2 is slightly better than Response 1\n"
+    "5 = Response 2 is better than Response 1\n"
+    "6 = Response 2 is much better than Response 1\n"
+    "#### Conversation Context ####\n"
+    "{conversation_history}\n"
+    "#### Responses to be Scored ####\n"
+    "{formatted_responses}\n"
+    "#### Output Format Requirements ####\n"
+    "{format_description}\n"
+)
+HELPSTEER3_PRINCIPLES_USER_PROMPT = (
+    "#### Conversation Context ####\n"
+    "{Query}\n"
+    "#### Responses to be Scored ####\n"
+    "Response 1:\n{Response_1}\nResponse 2:\n{Response_2}\n\n"
+    "#### Output Format Requirements ####\n"
+    "First state other potential criteria specific to the query and the context, and the weights of each criteria in the format of:\n"
+    "[The Begin of other criteria and weights]\n"
+    "State the criteria and the weights of each criteria\n"
+    "[The End of other criteria and weights]\n"
+    "Second give your analysis on each responses in the format of:\n"
+    "[The Begin of Analysis on Response i]\n"
+    "Analysis on the i-th response\n"
+    "[The End of Analysis on Response i]\n"
+    "Then give the scores of each response in order, separate by comma in the boxed, adhering this format:\n"
+    "[The Begin of Individual Scores]\n"
+    "\\boxed{{x, y}} if there exists 2 responses\n"
+    "[The End of Individual Scores]\n"
+    "Finally, give the relative ranking score in the format of:\n"
+    "[The Begin of Ranking Score]\n"
+    "\\boxed{{z}}\n"
+    "[The End of Ranking Score]\n"
 )
 
 # GENERIC_CONVERSATIONAL_INTELLIGENCE_SYSTEM_PROMPT = (
@@ -589,25 +664,25 @@ def format_judge_answers(question, answer_a, answer_b, multi_turn=False, model_m
         # print(f"helpsteer3 model zw")
         # if multi_turn:
         #     raise ValueError("helpsteer3 prompts do not support multi-turn prompts")
-        # else:
-        #     system_prompt = HELPSTEER3_SYSTEM_PROMPT
-        #     user_prompt = HELPSTEER3_USER_PROMPT.format(
-        #         Query=question,
-        #         Response_1=answer_a[1]["content"],
-        #         Response_2=answer_b[1]["content"],
-        #     )
         system_prompt = HELPSTEER3_SYSTEM_PROMPT
         user_prompt = HELPSTEER3_USER_PROMPT.format(
             Query=question,
-            Response_1=answer_a[1]["content"],
-            Response_2=answer_b[1]["content"],
+            Response_1=answer_a[1]["content"] if isinstance(answer_a, list) else answer_a,
+            Response_2=answer_b[1]["content"] if isinstance(answer_b, list) else answer_b,
+        )
+    elif model_modifier == "helpsteer3_principles":
+        system_prompt = HELPSTEER3_PRINCIPLES_SYSTEM_PROMPT
+        user_prompt = HELPSTEER3_PRINCIPLES_USER_PROMPT.format(
+            Query=question,
+            Response_1=answer_a[1]["content"] if isinstance(answer_a, list) else answer_a,
+            Response_2=answer_b[1]["content"] if isinstance(answer_b, list) else answer_b,
         )
     elif model_modifier == "generic_conversational_intellegence":
         system_prompt = GENERIC_CONVERSATIONAL_INTELLIGENCE_SYSTEM_PROMPT
         user_prompt = GENERIC_CONVERSATIONAL_INTELLIGENCE_USER_PROMPT.format(
             Query=question,
-            Response_1=answer_a[1]["content"],
-            Response_2=answer_b[1]["content"],
+            Response_1=answer_a[1] if isinstance(answer_a, list) else answer_a,
+            Response_2=answer_b[1] if isinstance(answer_b, list) else answer_b,
         )
     ##########################################################
     else:
@@ -771,45 +846,85 @@ def process_judgement(judgment, model_modifier):
         else:
             return "error"
     ########################################################## Modify to accommodate for helpsteer3
-    elif model_modifier == "helpsteer3":
+    elif model_modifier in ["helpsteer3", "generic_conversational_intellegence", "helpsteer3_principles"]:
+        # Standardized extraction with verl-private/verl/utils/reward_score/inf1_pie_platform.py
+
+        def find_boxed_string(string: str, pattern: str, first: bool = True) -> Optional[str]:
+            """Extract the first or last LaTeX boxed expression matching a regex pattern from a string.
+
+            Args:
+                string: Input string containing LaTeX code
+                pattern: Regex pattern to match boxed expressions
+                first: If True, return the first match; if False, return the last match
+
+            Returns:
+                The matched boxed expression or None if not found
+            """
+            matches = list(re.finditer(pattern, string))
+            if not matches:
+                return None
+            return matches[0].group(0) if first else matches[-1].group(0)
+
+        def last_boxed_only_string(string: str) -> Optional[str]:
+            """Extract the last LaTeX boxed expression (single or double curly braces) from a string.
+
+            Args:
+                string: Input string containing LaTeX code
+
+            Returns:
+                The last boxed expression or None if not found
+            """
+            # Accepts \boxed{...} or \boxed{{...}}
+            return find_boxed_string(string, r"\\boxed\{\{?[^,{}]+\}?\}", first=False)
+
+        def remove_boxed(s: str) -> str:
+            """Remove the LaTeX boxed command with single or double curly braces from a string.
+
+            Supports both single and pair boxed expressions (e.g., '\boxed{x}', '\boxed{x, y}', '\boxed{{x}}', or '\boxed{{x, y}}').
+
+            Args:
+                s: String with format "\\boxed{content}" or "\\boxed{{content}}"
+
+            Returns:
+                The content inside the boxed command
+            """
+            if s is None:
+                return None
+            left = "\\boxed{"
+            right = "}"
+            if not (s.startswith(left) and s.endswith(right)):
+                return None
+            inner = s[len(left):-len(right)]
+            # If wrapped in extra curly braces, remove them
+            if inner.startswith("{") and inner.endswith("}"):
+                inner = inner[1:-1]
+            return inner
+
         # Extract content between [The Begin of Ranking Score] and [The End of Ranking Score]
-        ranking_score_section = re.search(r'\[The Begin of Ranking Score\](.*?)\[The End of Ranking Score\]', judgment, re.DOTALL)
-        if ranking_score_section:
-            # Find the number inside \boxed{}
-            boxed_match = re.search(r'\\boxed\{(-?\d+)\}', ranking_score_section.group(1))
-            if boxed_match:
-                score = int(boxed_match.group(1))
-                if score <= 3: # 3 is the threshold for helpsteer3
-                    return "A"
-                elif score > 3: # 3 is the threshold for helpsteer3
-                    return "B"
-                else:
-                    return "error"
-            else:
-                return "error" # no boxed score found in the Ranking Score section
+        pattern = re.compile(
+            r"\\?\[The Begin of Ranking Score\\?\](.*?)\s*"
+            r"\\?\[The End of Ranking Score\\?\]",
+            re.DOTALL
+        )
+        match_result = re.search(pattern, judgment)
+        if match_result is not None:
+            ranking_score_section = match_result.group(1)
         else:
-            return "error" # Ranking Score section not found
-    ########################################################## Modify to accommodate for generic_conversational_intellegence
-    elif model_modifier == "generic_conversational_intellegence":
-        # Extract content between [The Begin of Ranking Score] and [The End of Ranking Score]
-        ranking_score_section = re.search(r'\[The Begin of Ranking Score\](.*?)\[The End of Ranking Score\]', judgment, re.DOTALL)
-        if ranking_score_section:
-            # Find the number inside \boxed{}
-            #boxed_match = re.search(r'\\boxed\{(-?\d+)\}', ranking_score_section.group(1))
-            # Modification to handle the case where the output is 'boxed' not '\\boxed'
-            boxed_match = re.search(r'boxed\{(-?\d+)\}', ranking_score_section.group(1))
-            if boxed_match:
-                score = int(boxed_match.group(1))
-                if score <= 3: # 3 is the threshold for helpsteer3
-                    return "A"
-                elif score > 3: # 3 is the threshold for helpsteer3
-                    return "B"
-                else:
-                    return "error"
+            print(f"DEBUG: judgment: {judgment}")
+            print(f"DEBUG: match_result: {match_result}")
+            return "error"  # no ranking score section found
+        preference_ranking_boxed_pred = last_boxed_only_string(ranking_score_section) if ranking_score_section is not None else None
+        preference_ranking_extracted_pred = remove_boxed(preference_ranking_boxed_pred) if preference_ranking_boxed_pred is not None else None
+        if preference_ranking_extracted_pred:
+            score = int(preference_ranking_extracted_pred)
+            if score <= 3: # 3 is the threshold for helpsteer3
+                return "A"
+            elif score > 3: # 3 is the threshold for helpsteer3
+                return "B"
             else:
-                return "error" # no boxed score found in the Ranking Score section
+                return "error"
         else:
-            return "error" # Ranking Score section not found
+            return "error" # no boxed score found in the Ranking Score section
     ##########################################################
     else:
         if "[[A]]" in judgment:

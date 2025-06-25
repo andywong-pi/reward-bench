@@ -24,6 +24,7 @@ import argparse
 import logging
 import os
 import sys
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -81,6 +82,7 @@ def get_args():
     parser.add_argument("--num_gpus", type=int, default=1, help="number of gpus to use, for multi-node vllm")
     parser.add_argument("--vllm_gpu_util", type=float, default=0.9, help="gpu utilization for vllm")
     # parser.add_argument("--vllm_max_seq_length", type=int, default=None, help="max sequence length for vllm")
+    parser.add_argument("--max_sampling_tokens", type=int, default=8192, help="max tokens for vllm")
     parser.add_argument("--do_not_save", action="store_true", help="do not save results to hub (for debugging)")
     parser.add_argument(
         "--eval_set",
@@ -167,7 +169,7 @@ def main():
             n=1,
             temperature=0,
             top_p=1,
-            max_tokens=2048,
+            max_tokens=args.max_sampling_tokens,
             stop_token_ids=stop_token_ids,
         )
 
@@ -192,6 +194,8 @@ def main():
     ########################################################## Modify to accommodate for helpsteer3
     elif "helpsteer3" in args.model or args.model_modifier == "helpsteer3":
         model_modifier = "helpsteer3"
+    elif "helpsteer3_principles" in args.model or args.model_modifier == "helpsteer3_principles":
+        model_modifier = "helpsteer3_principles"
     ########################################################## Modify to accommodate for generic_conversational_intellegence
     elif "generic_conversational_intellegence" in args.model or args.model_modifier == "generic_conversational_intellegence":
         model_modifier = "generic_conversational_intellegence"
@@ -313,18 +317,61 @@ def main():
         ############################
         # Run model weights with vllm
         ############################
+
+        def parse_conversation_history_and_responses(batch):
+            chosen = batch['text_chosen']
+            rejected = batch['text_rejected']
+            assert len(chosen) == len(rejected)
+
+            divergence_idx = 0
+            while divergence_idx < len(chosen) and chosen[divergence_idx] == rejected[divergence_idx]:
+                divergence_idx += 1
+
+            conversation_history = chosen[:divergence_idx]
+            response_win = chosen[divergence_idx:]
+            response_lose = rejected[divergence_idx:]
+
+            return conversation_history, response_win, response_lose
+        
+        def _format_chat_history_as_string(history):
+            """
+            Formats a list of chat turns into a JSON string.
+            """
+            if not isinstance(history, list):
+                # It might be a string already if data is messy
+                return str(history)
+            return json.dumps(history, indent=0)
+
+
+        def _format_response_as_string(response):
+            """
+            Formats a response list. If it's a single-turn response,
+            it returns the content. Otherwise, it formats it as a chat history.
+            """
+            if not isinstance(response, list):
+                return str(response)
+
+            if len(response) == 1 and "content" in response[0]:
+                assert response[0]["role"] == "assistant", f"The response `{response}` should be from the assistant"
+                return response[0]["content"]
+            
+            return _format_chat_history_as_string(response)
+
         def format_judgements(batch, optional_chat_template=None):
             prompt_ids = []  # Prevent crash if it's unused
-            # TODO expand this to include fastchat chat templates if needed
+            
             mult_turn = True if len(batch["text_chosen"]) > 2 else False
-            prompt = batch["text_chosen"][0]["content"]
-            answer_a = batch["text_chosen"]
-            answer_b = batch["text_rejected"]
-
-            if mult_turn and args.eval_set == "inf2_sets":
-                prompt = batch["text_chosen"][:-1]
-                answer_a = batch["text_chosen"][-2:]
-                answer_b = batch["text_rejected"][-2:]
+            if model_modifier not in ["helpsteer3", "helpsteer3_principles", "generic_conversational_intellegence"]:
+                prompt = batch["text_chosen"][0]["content"]
+                answer_a = batch["text_chosen"]
+                answer_b = batch["text_rejected"]
+            else:
+                # NOTE: enhanced support for multi-turn prompts
+                conversation_history, response_win, response_lose = parse_conversation_history_and_responses(
+                    batch)
+                prompt = _format_chat_history_as_string(conversation_history)
+                answer_a = _format_response_as_string(response_win)
+                answer_b = _format_response_as_string(response_lose)
 
             # shuffle a and b randomly for position bias
             is_shuffled = np.random.rand() > 0.5
@@ -438,13 +485,13 @@ def main():
         subset_dataset = out_dataset.filter(lambda example: example["subset"] == subset)
         num_correct = sum(subset_dataset["results"])
         num_total = len(subset_dataset["results"])
-        print(f"{subset}: {num_correct}/{num_total} ({num_correct/num_total})")
+        logger.info(f"{subset}: {num_correct}/{num_total} ({num_correct/num_total})")
         results_grouped[subset] = num_correct / num_total
 
     # log leaderboard aggregated results
     if args.eval_set == "core_set":
         results_leaderboard = calculate_scores_per_section(EXAMPLE_COUNTS, SUBSET_MAPPING, results_grouped)
-        print(results_leaderboard)
+        logger.info(results_leaderboard)
 
     ############################
     # Upload results to hub
