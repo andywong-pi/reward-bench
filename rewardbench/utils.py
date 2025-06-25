@@ -47,6 +47,7 @@ EVAL_REPO_V2 = "allenai/reward-bench-2-results"  # data repo to upload results
 
 INF2_SETS = [
     "/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
+    "/mnt/vast/home/jimmy/data/inf2/rl/validation.parquet"
 ]
 
 # get token from HF_TOKEN env variable, but if it doesn't exist pass none
@@ -334,7 +335,12 @@ def load_eval_dataset(
             datasets = []
             for fname in INF2_SETS:
                 subset = fname.split("/")[-1].split(".")[0]
-                ds = load_dataset("json", data_files=fname, split="train")
+                if fname.endswith('.jsonl'):
+                    ds = load_dataset("json", data_files=fname, split="train")
+                elif fname.endswith('.parquet'):
+                    ds = load_dataset("parquet", data_files=fname, split="train")
+                else:
+                    continue  # skip unknown file types
                 ds = ds.add_column("subset", [subset] * len(ds))
                 datasets.append(ds)
             raw_dataset = concatenate_datasets(datasets)

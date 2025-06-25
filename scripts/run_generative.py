@@ -78,7 +78,11 @@ def get_args():
     # parser.add_argument("--vllm_max_seq_length", type=int, default=None, help="max sequence length for vllm")
     parser.add_argument("--do_not_save", action="store_true", help="do not save results to hub (for debugging)")
     parser.add_argument(
-        "--pref_sets", action="store_true", help="run on common preference sets instead of our custom eval set"
+        "--eval_set",
+        type=str,
+        choices=["core_set", "pref_sets", "inf2_sets"],
+        default="core_set",
+        help="which evaluation set to use: 'core_set', 'pref_sets', or 'inf2_sets'"
     )
     parser.add_argument(
         "--debug", action="store_true", help="run on common preference sets instead of our custom eval set"
@@ -193,7 +197,7 @@ def main():
     ############################
     logger.info("*** Load dataset ***")
     dataset, subsets = load_eval_dataset(
-        core_set=not args.pref_sets,
+        eval_set=args.eval_set,
         conv=get_conv_template("raw"),  # not used in this script (handled later)
         custom_dialogue_formatting=True,  # handle formatting later
         tokenizer=None,
@@ -202,7 +206,7 @@ def main():
         max_turns=4,
     )
 
-    # copy id for saving, then remove
+    # copy hiid for saving, then remove
     ids = dataset["id"]
     dataset = dataset.remove_columns("id")
 

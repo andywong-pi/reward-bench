@@ -214,7 +214,7 @@ def main():
         tokenizer=None,
         logger=logger,
         keep_columns=["text_chosen", "text_rejected", "id"],
-        max_turns=4, # TODO: may want to drop this for inf2_set
+        max_turns=4,
     )
 
     # copy id for saving, then remove
