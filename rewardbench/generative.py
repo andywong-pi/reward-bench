@@ -876,6 +876,7 @@ def process_judgement(judgment, model_modifier):
             """
             # Accepts \boxed{...} or \boxed{{...}}
             return find_boxed_string(string, r"\\boxed\{\{?[^,{}]+\}?\}", first=False)
+            # return find_boxed_string(string, r'boxed\{(-?\d+)\}', first=False)
 
         def remove_boxed(s: str) -> str:
             """Remove the LaTeX boxed command with single or double curly braces from a string.
@@ -901,6 +902,22 @@ def process_judgement(judgment, model_modifier):
             return inner
 
         # Extract content between [The Begin of Ranking Score] and [The End of Ranking Score]
+        # ranking_score_section = re.search(r'\[The Begin of Ranking Score\](.*?)\[The End of Ranking Score\]', judgment, re.DOTALL)
+        # if ranking_score_section:
+        #     boxed_match = re.search(r'boxed\{(-?\d+)\}', ranking_score_section.group(1))
+        #     if boxed_match:
+        #         score = int(boxed_match.group(1))
+        #         if score <= 3: # 3 is the threshold for helpsteer3
+        #             return "A"
+        #         elif score > 3: # 3 is the threshold for helpsteer3
+        #             return "B"
+        #         else:
+        #             return "error"
+        #     else:
+        #         return "error" # no boxed score found in the Ranking Score section
+        # else:
+        #     return "error" # Ranking Score section not found
+        
         pattern = re.compile(
             r"\\?\[The Begin of Ranking Score\\?\](.*?)\s*"
             r"\\?\[The End of Ranking Score\\?\]",

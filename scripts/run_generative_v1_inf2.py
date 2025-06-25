@@ -255,7 +255,7 @@ def main():
                 winner_text = "A"
                 loser_text = "B"
 
-            if len(batch["text_chosen"]) <= 4:  # set up only for 1 or 2 turns
+            if len(batch["text_chosen"]) <= 4 or args.eval_set == "inf2_sets":  # set up only for 1 or 2 turns, except for inf2_sets
                 if not args.score_w_ratings:
                     winner, request, judgement = run_judge_pair(
                         prompt, answer_a, answer_b, args.model, multi_turn=mult_turn, model_modifier=model_modifier
@@ -342,7 +342,6 @@ def main():
                 return str(history)
             return json.dumps(history, indent=0)
 
-
         def _format_response_as_string(response):
             """
             Formats a response list. If it's a single-turn response,
@@ -365,6 +364,16 @@ def main():
                 prompt = batch["text_chosen"][0]["content"]
                 answer_a = batch["text_chosen"]
                 answer_b = batch["text_rejected"]
+
+            # else:
+            #     if mult_turn:
+            #         prompt = batch["text_chosen"][:-1]
+            #         answer_a = batch["text_chosen"][-2:]
+            #         answer_b = batch["text_rejected"][-2:]
+            #     else:
+            #         prompt = batch["text_chosen"][0]["content"]
+            #         answer_a = batch["text_chosen"]
+            #         answer_b = batch["text_rejected"]
             else:
                 # NOTE: enhanced support for multi-turn prompts
                 conversation_history, response_win, response_lose = parse_conversation_history_and_responses(
