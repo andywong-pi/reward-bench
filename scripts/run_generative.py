@@ -180,6 +180,9 @@ def main():
     ########################################################## Modify to accommodate for helpsteer3
     elif "helpsteer3" in args.model or args.model_modifier == "helpsteer3":
         model_modifier = "helpsteer3"
+    ########################################################## Modify to accommodate for generic_conversational_intellegence
+    elif "generic_conversational_intellegence" in args.model or args.model_modifier == "generic_conversational_intellegence":
+        model_modifier = "generic_conversational_intellegence"
     else:
         model_modifier = None
 

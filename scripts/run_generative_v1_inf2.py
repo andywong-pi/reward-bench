@@ -93,6 +93,9 @@ def get_args():
         "--debug", action="store_true", help="run on common preference sets instead of our custom eval set"
     )
     parser.add_argument(
+        "--num_debug_examples", type=int, default=100, help="number of examples to use for debugging"
+    )
+    parser.add_argument(
         "--num_threads", type=int, default=10, help="number of threads to use for parallel processing of examples"
     )
     parser.add_argument(
@@ -214,11 +217,13 @@ def main():
     ids = dataset["id"]
     dataset = dataset.remove_columns("id")
 
-    # debug: use only 10 examples
+    # debug: randomly sample num_debug_examples from the dataset for debugging
     if args.debug:
-        dataset = dataset.select(range(10))
-        subsets = subsets[:10]
-        ids = ids[:10]
+        rng = np.random.default_rng(42)  # fixed seed for reproducibility
+        indices = rng.choice(len(dataset), size=args.num_debug_examples, replace=False)
+        dataset = dataset.select(indices)
+        subsets = [subsets[i] for i in indices]
+        ids = [ids[i] for i in indices]
 
     if is_api_models:
         ############################
@@ -317,7 +322,7 @@ def main():
             answer_b = batch["text_rejected"]
 
             if mult_turn and args.eval_set == "inf2_sets":
-                prompt = tokenizer.apply_chat_template(batch["text_chosen"][:-1], tokenize=False, add_generation_prompt=True)
+                prompt = batch["text_chosen"][:-1]
                 answer_a = batch["text_chosen"][-2:]
                 answer_b = batch["text_rejected"][-2:]
 
