@@ -428,7 +428,7 @@ def main():
         results_grouped[subset] = num_correct / num_total
 
     # log leaderboard aggregated results
-    if not args.pref_sets:
+    if args.eval_set == "core_set":
         results_leaderboard = calculate_scores_per_section(EXAMPLE_COUNTS, SUBSET_MAPPING, results_grouped)
         print(results_leaderboard)
 
@@ -438,7 +438,7 @@ def main():
     # args.score_w_ratings because results not comprable to those already existing, can change later
     do_not_save = args.do_not_save or args.score_w_ratings
 
-    sub_path = "eval-set/" if not args.pref_sets else "pref-sets/"
+    sub_path = "eval-set/" if not args.eval_set else "pref-sets/"
     results_url = save_to_hub(
         results_grouped,
         model_name,
@@ -460,7 +460,7 @@ def main():
     scores_dict["model"] = model_name
     scores_dict["model_type"] = model_type
 
-    sub_path_scores = "eval-set-scores/" if not args.pref_sets else "pref-sets-scores/"
+    sub_path_scores = "eval-set-scores/" if not args.eval_set else "pref-sets-scores/"
 
     scores_url = save_to_hub(scores_dict, model_name, sub_path_scores, args.debug, local_only=args.do_not_save)
     logger.info(f"Uploading chosen-rejected text with scores to {scores_url}")
