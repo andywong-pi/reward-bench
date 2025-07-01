@@ -13,6 +13,7 @@ import numpy as np
 random.seed(42)  # You can use any number (42 is a common choice)
 from rewardbench.constants import EXAMPLE_COUNTS, SUBSET_MAPPING
 from rewardbench.utils import calculate_scores_per_section
+from itertools import product
 
 INF2_SETS = [
     "/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
@@ -20,6 +21,7 @@ INF2_SETS = [
 ]
 REWARDBENCH_v1_SET = "allenai/reward-bench"
 JUDGEBENCH_SET = "ScalerLab/JudgeBench"
+RM_BENCH_SET = "THU-KEG/RM-Bench"
 
 HELPSTEER3_PRINCIPLES_SYSTEM_PROMPT = (
     "You are a skilled little expert at scoring responses. "
@@ -168,46 +170,50 @@ def find_first_difference(str1, str2):
             return i
     return len(str1)
 
-def generate_prompt_response(dataset, set_name):
-    if set_name in ["inf2_sets", "rewardbench_v1_set", "judgebench_gpt_set", "judgebench_claude_set"]:        
-        # Process each row to split into prompt and responses
-        def split_prompt_response(row):
-            chosen = row["text_chosen"]
-            rejected = row["text_rejected"]
-            
-            # Find the first differing character
-            split_idx = find_first_difference(chosen, rejected)
-            
-            # Split into prompt and responses
-            prompt = chosen[:split_idx]
-            new_chosen = chosen[split_idx:]
-            new_rejected = rejected[split_idx:]
+def generate_prompt_response(dataset, set_name, swap=False):
+    """Process dataset to split into prompts and responses, optionally doubling size with swapped versions."""
+    valid_sets = {"inf2_sets", "rewardbench_v1_set", "judgebench_gpt_set", "judgebench_claude_set", "rm_bench_set"}
+    if set_name not in valid_sets:
+        raise ValueError(f"Invalid set_name: {set_name}. Must be one of {valid_sets}")
 
-            if random.random() < 0.5:
-                response1 = new_chosen
-                response2 = new_rejected
-                is_shuffled = False
-            else:
-                response1 = new_rejected
-                response2 = new_chosen
-                is_shuffled = True
-            
-            return {
-                "prompt": prompt,
-                "text_chosen": new_chosen,
-                "text_rejected": new_rejected,
-                "response1": response1,
-                "response2": response2,
-                "is_shuffled": is_shuffled,
-            }
+    def create_entry(row, prompt, chosen_resp, rejected_resp, response1, response2, is_shuffled):
+        """Helper function to create a standardized entry while preserving original fields."""
+        new_entry = row.copy()
+        new_entry.update({
+            "prompt": prompt,
+            "text_chosen": chosen_resp,
+            "text_rejected": rejected_resp,
+            "response1": response1,
+            "response2": response2,
+            "is_shuffled": is_shuffled
+        })
+        return new_entry
+
+    def process_row(row):
+        chosen, rejected = row["text_chosen"], row["text_rejected"]
+        split_idx = find_first_difference(chosen, rejected)
+        prompt, chosen_resp, rejected_resp = chosen[:split_idx], chosen[split_idx:], rejected[split_idx:]
         
-        # Apply the transformation to each row
-        dataset = dataset.map(split_prompt_response)
-        
-    else:
-        raise ValueError(f"set_name {set_name} formatting is not defined")
+        entry = create_entry(row, prompt, chosen_resp, rejected_resp, 
+                           chosen_resp, rejected_resp, False)
+        swapped_entry = create_entry(row, prompt, chosen_resp, rejected_resp, 
+                                   rejected_resp, chosen_resp, True)
+        if swap:
+            return [entry, swapped_entry]
+        return [entry] if random.random() < 0.5 else [swapped_entry]
+
+    # Single iteration that processes rows and collects keys
+    all_keys = set()
+    processed_rows = []
     
-    return dataset
+    for row in dataset:
+        processed = process_row(row)  # Always returns a list now
+        processed_rows.extend(processed)
+        # Update keys with the first processed item's keys
+        if processed and not all_keys:  # Only need to do this once
+            all_keys.update(processed[0].keys())
+    
+    return Dataset.from_dict({k: [row[k] for row in processed_rows] for k in all_keys})
 
 def filter_long_turns(batch, max_turns):
     return len(batch["text_chosen"]) // 2 <= max_turns
@@ -317,6 +323,44 @@ def load_judgebench_dataset(args):
     raw_dataset = raw_dataset.map(format_conversation)    
     return raw_dataset
 
+def load_rm_bench_dataset(args):
+    raw_dataset = load_dataset(RM_BENCH_SET, split="train")
+
+    # Assuming raw_dataset is already loaded
+    expanded_data = []
+
+    for example in raw_dataset:
+        chosen_items = example['chosen']  # List of 3 chosen responses
+        rejected_items = example['rejected']  # List of 3 rejected responses
+        
+        # Generate all 3x3=9 combinations
+        for chosen, rejected in product(chosen_items, rejected_items):
+            # chosen_items = ['A', 'B', 'C']
+            # rejected_items = ['X', 'Y', 'Z']
+            # A X / A Y / A Z
+            # B X / B Y / B Z
+            # C X / C Y / C Z
+            text_chosen = [
+                {"role": "user", "content": example["prompt"]},
+                {"role": "assistant", "content": chosen}
+            ]
+            text_rejected = [
+                {"role": "user", "content": example["prompt"]},
+                {"role": "assistant", "content": rejected}
+            ]
+            expanded_data.append({
+                'id': example['id'],
+                'prompt': example['prompt'],
+                'chosen': chosen,  # Note: Your original has 'chosen' (corrected spelling)
+                'rejected': rejected,
+                'text_chosen': text_chosen,
+                'text_rejected': text_rejected,
+                'subset': example['domain']
+            })
+    # Convert the list of dictionaries to a Hugging Face Dataset
+    expanded_dataset = Dataset.from_list(expanded_data)
+    return expanded_dataset
+
 def load_datasets(args) -> Tuple[Dataset, List[str]]:
     """Load datasets with subset tracking"""
     # Extract dataset path from set_name
@@ -326,10 +370,12 @@ def load_datasets(args) -> Tuple[Dataset, List[str]]:
         raw_dataset = load_rewardbench_v1_dataset(REWARDBENCH_v1_SET)
     elif args.dataset == "judgebench_gpt_set" or args.dataset == "judgebench_claude_set":
         raw_dataset = load_judgebench_dataset(args)
+    elif args.dataset == "rm_bench_set":
+        raw_dataset = load_rm_bench_dataset(args)
     else:
         raise ValueError(f"set_name {args.dataset} cannot be found")
 
-    formatted_dataset = generate_prompt_response(raw_dataset, set_name=args.dataset)
+    formatted_dataset = generate_prompt_response(raw_dataset, set_name=args.dataset, swap=args.swap)
     filtered_dataset = formatted_dataset.filter(lambda x: filter_long_turns(x, args.max_turns))
     # Apply to your dataset
     dataset = filtered_dataset.map(lambda x: apply_prompt_templates(x, args.prompt_type), batched=False)
@@ -538,20 +584,122 @@ def process_example(example):
         # return {'score': 0.5} remove this impact
         return {'score': 0.5}
 
+def calculate_judgebench_accuracy_swap(dataset, subsets):
+    print("###\nThe start of swap analysis\n###\n")
+    # print per subset and log into results_grouped file
+    present_subsets = np.unique(subsets)
+    results_grouped = {}
+    for subset in present_subsets:
+        subset_dataset = dataset.filter(lambda example: example["subset"] == subset)
+        scores = subset_dataset["score"]
+        num_total = len(scores)
+
+        # Swap case - analyze pairs
+        both_correct = 0
+        both_wrong = 0
+        one_correct_one_wrong = 0
+            
+        for i in range(0, num_total, 2):
+            if i+1 >= num_total:
+                break  # skip last item if odd number
+                
+            score1 = scores[i]
+            score2 = scores[i+1]
+                
+            if score1 and score2:
+                both_correct += 1
+            elif not score1 and not score2:
+                both_wrong += 1
+            else:
+                one_correct_one_wrong += 1
+            
+        total_pairs = both_correct + both_wrong + one_correct_one_wrong
+        results_grouped[subset] = {
+            'both_correct': both_correct,
+            'both_wrong': both_wrong,
+            'one_correct_one_wrong': one_correct_one_wrong,
+            'total_pairs': total_pairs,
+            'both_correct_ratio': both_correct / total_pairs if total_pairs > 0 else 0,
+            'both_wrong_ratio': both_wrong / total_pairs if total_pairs > 0 else 0,
+            'mixed_ratio': one_correct_one_wrong / total_pairs if total_pairs > 0 else 0
+        }
+            
+        print(f"\n{subset} (swap analysis):")
+        print(f"Total pairs: {total_pairs}")
+        print(f"Both correct: {both_correct}/{total_pairs} ({both_correct/total_pairs if total_pairs > 0 else 0})")
+        print(f"Both wrong: {both_wrong}/{total_pairs} ({both_wrong/total_pairs if total_pairs > 0 else 0})")
+        print(f"One correct one wrong: {one_correct_one_wrong}/{total_pairs} ({one_correct_one_wrong/total_pairs if total_pairs > 0 else 0})")
+
+def calculate_rm_bench_accuracy(dataset, subsets):
+    hard_indices = [1, 2, 5]
+    normal_indices = [0, 4, 8]
+    easy_indices = [3, 6, 7]
+
+    print("###\nThe start of hard/normal/easy analysis\n###\n")
+    
+    # Initialize counters for overall dataset
+    overall_counts = [0, 0, 0]  # hard, normal, easy
+    overall_totals = [0, 0, 0]  # total hard, normal, easy examples in entire dataset
+    
+    # print per subset and log into results_grouped file
+    present_subsets = np.unique(subsets)
+    results_grouped = {}
+    for subset in present_subsets:
+        subset_dataset = dataset.filter(lambda example: example["subset"] == subset)
+        scores = subset_dataset["score"]
+
+        counts = [0, 0, 0]  # hard, normal, easy
+        num_examples = [0, 0, 0]  # hard, normal, easy totals
+        
+        for i, example in enumerate(subset_dataset):
+            if i % 9 in hard_indices:
+                counts[0] += example['score']
+                num_examples[0] += 1
+                overall_counts[0] += example['score']
+                overall_totals[0] += 1
+            elif i % 9 in normal_indices:
+                counts[1] += example['score']
+                num_examples[1] += 1
+                overall_counts[1] += example['score']
+                overall_totals[1] += 1
+            elif i % 9 in easy_indices:
+                counts[2] += example['score']
+                num_examples[2] += 1
+                overall_counts[2] += example['score']
+                overall_totals[2] += 1
+
+        print(f"Subset {subset}:")
+        print(f"  Hard accuracy: {counts[0]}/{num_examples[0]} ({counts[0]/num_examples[0] if num_examples[0] > 0 else 0})")
+        print(f"  Normal accuracy: {counts[1]}/{num_examples[1]} ({counts[1]/num_examples[1] if num_examples[1] > 0 else 0})")
+        print(f"  Easy accuracy: {counts[2]}/{num_examples[2]} ({counts[2]/num_examples[2] if num_examples[2] > 0 else 0})")
+        print()
+    
+    # Print overall dataset statistics
+    print("Overall dataset:")
+    print(f"  Hard accuracy: {overall_counts[0]}/{overall_totals[0]} ({overall_counts[0]/overall_totals[0] if overall_totals[0] > 0 else 0})")
+    print(f"  Normal accuracy: {overall_counts[1]}/{overall_totals[1]} ({overall_counts[1]/overall_totals[1] if overall_totals[1] > 0 else 0})")
+    print(f"  Easy accuracy: {overall_counts[2]}/{overall_totals[2]} ({overall_counts[2]/overall_totals[2] if overall_totals[2] > 0 else 0})")
+
 def evaluation(dataset, subsets, args):
     # print per subset and log into results_grouped file
     present_subsets = np.unique(subsets)
     results_grouped = {}
     for subset in present_subsets:
         subset_dataset = dataset.filter(lambda example: example["subset"] == subset)
-        num_correct = sum(subset_dataset["score"])
-        num_total = len(subset_dataset["score"])
+        scores = subset_dataset["score"]
+        num_total = len(scores)
+
+        num_correct = sum(scores)
         results_grouped[subset] = num_correct / num_total
         print(f"{subset}: {num_correct}/{num_total} ({num_correct/num_total})")
 
     if args.dataset == "rewardbench_v1_set":
         results_leaderboard = calculate_scores_per_section(EXAMPLE_COUNTS, SUBSET_MAPPING, results_grouped)
         print(f"rewardbench_v1_leadboard: {results_leaderboard}")
+    elif (args.dataset == "judgebench_gpt_set" or args.dataset == "judgebench_claude_set") and args.swap:
+        calculate_judgebench_accuracy_swap(dataset, subsets)
+    elif args.dataset == "rm_bench_set":
+        calculate_rm_bench_accuracy(dataset, subsets)
 
 def setup_argparse() -> argparse.Namespace:
     """Set up argument parser"""
@@ -561,10 +709,12 @@ def setup_argparse() -> argparse.Namespace:
     parser.add_argument('--model', type=str, required=True,
                        help='Model name or path for vLLM')
     parser.add_argument('--dataset', type=str, required=True,
-                       choices=['inf2_sets', 'rewardbench_v1_set', 'judgebench_gpt_set', 'judgebench_claude_set'],
+                       choices=['inf2_sets', 'rewardbench_v1_set', 'judgebench_gpt_set', 'judgebench_claude_set', 'rm_bench_set'],
                        help='Different dataset(s)')
     parser.add_argument('--max_turns', type=int, default=4,
                        help='Maximum turns to be maintained, otherwise will be filtered out')
+    parser.add_argument('--swap', action='store_true', default=False,
+                       help="Whether the sequences of responses will be swapped")
     
     # New prompt selection argument
     parser.add_argument('--prompt_type', type=str, required=True,
@@ -605,7 +755,7 @@ def main():
     dataset, subsets = load_datasets(args)
     print(f"Loaded {len(dataset)} samples from {args.dataset}")
     
-    if args.debug:
+    if args.debug and not args.swap:
         dataset = dataset.shuffle(seed=42).select(range(min(args.max_debug_examples, len(dataset))))
         #dataset = dataset.select(range(min(args.max_debug_examples, len(dataset))))
         print(f"Debug mode: Limited to {len(dataset)} samples")
