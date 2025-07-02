@@ -22,6 +22,7 @@ INF2_SETS = [
 REWARDBENCH_v1_SET = "allenai/reward-bench"
 JUDGEBENCH_SET = "ScalerLab/JudgeBench"
 RM_BENCH_SET = "THU-KEG/RM-Bench"
+REWARDBENCH_v2_SET = "allenai/reward-bench-2"
 
 HELPSTEER3_PRINCIPLES_SYSTEM_PROMPT = (
     "You are a skilled little expert at scoring responses. "
@@ -159,6 +160,18 @@ GENERIC_CONVERSATIONAL_INTELLIGENCE_USER_PROMPT = (
     "[The End of Ranking Score]\n"
 )
 
+MTBENCH_REWARDBENCH_v2_SYSTEM_PROMPT = (
+    "Please act as an impartial judge and evaluate the quality of the responses provided by four AI assistants to the user question displayed below. "
+    "You should choose the assistant that follows the user's instructions and answers the user's question best. Your evaluation should consider "
+    "factors such as the helpfulness, relevance, accuracy, depth, creativity, and level of detail of their responses. Begin your evaluation by "
+    "comparing the four responses and provide a short explanation. Avoid any position biases and ensure that the order in which the responses were "
+    "presented does not influence your decision. Do not allow the length of the responses to influence your evaluation. Do not favor certain names "
+    "of the assistants. Be as objective as possible. After providing your explanation, output your final verdict by strictly following this format: "
+    '"[[A]]" if assistant A is best, "[[B]]" if assistant B is best, "[[C]]" if assistant C is best, and "[[D]]" if assistant D is best.'
+)
+
+MTBENCH_REWARDBENCH_v2_USER_PROMPT = "[User Question]\n{question}\n\n[The Start of Assistant A's Answer]\n{answer_a}\n[The End of Assistant A's Answer]\n\n[The Start of Assistant B's Answer]\n{answer_b}\n[The End of Assistant B's Answer]\n\n[The Start of Assistant C's Answer]\n{answer_c}\n[The End of Assistant C's Answer]\n\n[The Start of Assistant D's Answer]\n{answer_d}\n[The End of Assistant D's Answer]"
+
 def find_first_difference(str1, str2):
     """
     Find the index of the first character that differs between two strings.
@@ -215,6 +228,49 @@ def generate_prompt_response(dataset, set_name, swap=False):
     
     return Dataset.from_dict({k: [row[k] for row in processed_rows] for k in all_keys})
 
+def generate_prompt_response_rewardbench_v2(dataset, set_name, swap=False):
+    """Process dataset to split into prompts and responses, optionally doubling size with swapped versions."""
+    valid_sets = {"rewardbench_v2_set"}
+    if set_name not in valid_sets:
+        raise ValueError(f"Invalid set_name: {set_name}. Must be one of {valid_sets}")
+
+    def process_row(row):
+        chosen, rejected = row["text_chosen"], row["text_rejected"]
+        split_idx = find_first_difference(chosen[0], rejected[0])
+        prompt = chosen[0][:split_idx]
+        
+        # Create list of all responses
+        responses = [
+            chosen[0][split_idx:],    # chosen response
+            rejected[0][split_idx:],  # rejected0
+            rejected[1][split_idx:],  # rejected1
+            rejected[2][split_idx:]   # rejected2
+        ]
+        
+        # Remember which one is chosen (index 0)
+        chosen_index = 0
+        
+        # Get shuffled indices
+        indices = list(range(len(responses)))
+        random.shuffle(indices)
+        
+        # Find where the chosen response moved to
+        new_chosen_index = indices.index(chosen_index)
+        
+        # Shuffle the responses according to the shuffled indices
+        shuffled_responses = [responses[i] for i in indices]
+
+        row["prompt"] = prompt
+        row["response1"] = shuffled_responses[0]
+        row["response2"] = shuffled_responses[1]
+        row["response3"] = shuffled_responses[2]
+        row["response4"] = shuffled_responses[3]
+        row["is_shuffled"] = str(new_chosen_index+1) # 1-4
+        return row
+
+    dataset = dataset.map(process_row)
+    return dataset
+
 def filter_long_turns(batch, max_turns):
     return len(batch["text_chosen"]) // 2 <= max_turns
 
@@ -236,6 +292,15 @@ def apply_prompt_templates(example, prompt_type: str) -> dict:
             Query=example['prompt'],
             Response_1=example['response1'],
             Response_2=example['response2'],
+        )
+    elif prompt_type == "rewardbench_v2_mtbench":
+        system_prompt = MTBENCH_REWARDBENCH_v2_SYSTEM_PROMPT
+        user_prompt = MTBENCH_REWARDBENCH_v2_USER_PROMPT.format(
+            question=example['prompt'],
+            answer_a=example['response1'],
+            answer_b=example['response2'],
+            answer_c=example['response3'],
+            answer_d=example['response4'],
         )
     else:
         raise ValueError(f"Unknown prompt type: {prompt_type}")
@@ -361,6 +426,42 @@ def load_rm_bench_dataset(args):
     expanded_dataset = Dataset.from_list(expanded_data)
     return expanded_dataset
 
+def load_rewardbench_v2_dataset(data_paths):
+    raw_dataset = load_dataset(data_paths, split="test")
+
+    def format_conversation(example):
+        """Convert prompt/chosen/rejected into structured conversations."""
+        return {
+            "text_chosen": [
+                [
+                    {"role": "user", "content": example["prompt"]},
+                    {"role": "assistant", "content": example["chosen"][0]}
+                ]
+            ],
+            "text_rejected": [
+                [
+                    {"role": "user", "content": example["prompt"]},
+                    {"role": "assistant", "content": example["rejected"][0]}
+                ],
+                [
+                    {"role": "user", "content": example["prompt"]},
+                    {"role": "assistant", "content": example["rejected"][1]}
+                ],
+                [   
+                    {"role": "user", "content": example["prompt"]},
+                    {"role": "assistant", "content": example["rejected"][2]}
+                ]
+            ]
+        }
+
+    
+    # Filter the dataset to exclude examples where 'subset' is 'Ties'
+    main_dataset = raw_dataset.filter(lambda example: example['subset'] != 'Ties')
+    # ties_dataset = raw_dataset.filter(lambda example: example['subset'] == 'Ties')
+    # Apply the transformation
+    main_dataset = main_dataset.map(format_conversation)  
+    return main_dataset
+
 def load_datasets(args) -> Tuple[Dataset, List[str]]:
     """Load datasets with subset tracking"""
     # Extract dataset path from set_name
@@ -372,13 +473,20 @@ def load_datasets(args) -> Tuple[Dataset, List[str]]:
         raw_dataset = load_judgebench_dataset(args)
     elif args.dataset == "rm_bench_set":
         raw_dataset = load_rm_bench_dataset(args)
+    elif args.dataset == "rewardbench_v2_set":
+        raw_dataset = load_rewardbench_v2_dataset(REWARDBENCH_v2_SET)
     else:
         raise ValueError(f"set_name {args.dataset} cannot be found")
 
-    formatted_dataset = generate_prompt_response(raw_dataset, set_name=args.dataset, swap=args.swap)
+    if args.dataset == "rewardbench_v2_set":
+        formatted_dataset = generate_prompt_response_rewardbench_v2(raw_dataset, set_name=args.dataset, swap=False)
+    else:
+        # swap is only utilized for judgebench
+        formatted_dataset = generate_prompt_response(raw_dataset, set_name=args.dataset, swap=args.swap)
     filtered_dataset = formatted_dataset.filter(lambda x: filter_long_turns(x, args.max_turns))
     # Apply to your dataset
     dataset = filtered_dataset.map(lambda x: apply_prompt_templates(x, args.prompt_type), batched=False)
+        
     # Debug: select certain samples
     # take column subset from dataset
     subsets = dataset["subset"]
@@ -568,21 +676,40 @@ def output_parser(example, prompt_type):
                 return "error"
         else:
             return "error" # no boxed score found in the Ranking Score section
+    elif prompt_type in ["rewardbench_v2_mtbench"]:
+        if "[[A]]" in judgment:
+            return "1"
+        elif "[[B]]" in judgment:
+            return "2"
+        elif "[[C]]" in judgment:
+            return "3"
+        elif "[[D]]" in judgment:
+            return "4"
+        else:
+            return "error"
     else:
         raise ValueError(f"The model parser is not defined")
 
 # Iterate through the dataset and apply the logic
-def process_example(example):
+def process_example(example, prompt_type):
     answer = example['answers']  # replace with your answer column name
     is_shuffled = example['is_shuffled']  # replace with your is_shuffled column name
     
-    if (answer == 'A' and not is_shuffled) or (answer == 'B' and is_shuffled):
-        return {'score': 1}
-    elif (answer == 'A' and is_shuffled) or (answer == 'B' and not is_shuffled):
-        return {'score': 0}
+    if prompt_type in ['helpsteer3', 'generic_conversational_intellegence']:
+        if (answer == 'A' and not is_shuffled) or (answer == 'B' and is_shuffled):
+            return {'score': 1}
+        elif (answer == 'A' and is_shuffled) or (answer == 'B' and not is_shuffled):
+            return {'score': 0}
+        else:
+            # return {'score': 0.5} remove this impact
+            return {'score': 0}
+    elif prompt_type in ['rewardbench_v2_mtbench']:
+        if answer == is_shuffled:
+            return {'score': 1}
+        else:
+            return {'score': 0}
     else:
-        # return {'score': 0.5} remove this impact
-        return {'score': 0.5}
+        raise ValueError(f"Invalid prompt type: {prompt_type}")
 
 def calculate_judgebench_accuracy_swap(dataset, subsets):
     print("###\nThe start of swap analysis\n###\n")
@@ -709,7 +836,7 @@ def setup_argparse() -> argparse.Namespace:
     parser.add_argument('--model', type=str, required=True,
                        help='Model name or path for vLLM')
     parser.add_argument('--dataset', type=str, required=True,
-                       choices=['inf2_sets', 'rewardbench_v1_set', 'judgebench_gpt_set', 'judgebench_claude_set', 'rm_bench_set'],
+                       choices=['inf2_sets', 'rewardbench_v1_set', 'judgebench_gpt_set', 'judgebench_claude_set', 'rm_bench_set', 'rewardbench_v2_set'],
                        help='Different dataset(s)')
     parser.add_argument('--max_turns', type=int, default=4,
                        help='Maximum turns to be maintained, otherwise will be filtered out')
@@ -718,7 +845,7 @@ def setup_argparse() -> argparse.Namespace:
     
     # New prompt selection argument
     parser.add_argument('--prompt_type', type=str, required=True,
-                       choices=['helpsteer3', 'generic_conversational_intellegence'],
+                       choices=['helpsteer3', 'generic_conversational_intellegence', 'rewardbench_v2_mtbench'],
                        help='Type of prompt template to use')
     
     # New GPU control argument
@@ -762,7 +889,7 @@ def main():
 
     print("Initializing LLM...")
     engine = vLLMInferenceEngine(args)
-        
+
     print("Running inference...")
     results = engine.batch_predict(dataset, args.use_chat_template)
     dataset = dataset.add_column('evaluation', results)
@@ -771,7 +898,7 @@ def main():
     answers = [output_parser(example, args.prompt_type) for example in dataset]
     dataset = dataset.add_column('answers', answers)
     # Apply the function to the dataset
-    dataset = dataset.map(process_example)
+    dataset = dataset.map(process_example, fn_kwargs={"prompt_type": args.prompt_type})
 
     print("Evaluation...")
     evaluation(dataset, subsets, args)
