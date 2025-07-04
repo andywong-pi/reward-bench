@@ -14,6 +14,7 @@ random.seed(42)  # You can use any number (42 is a common choice)
 from rewardbench.constants import EXAMPLE_COUNTS, SUBSET_MAPPING
 from rewardbench.utils import calculate_scores_per_section
 from itertools import product
+from rewardbench import process_single_model
 
 INF2_SETS = [
     "/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
@@ -172,6 +173,27 @@ MTBENCH_REWARDBENCH_v2_SYSTEM_PROMPT = (
 
 MTBENCH_REWARDBENCH_v2_USER_PROMPT = "[User Question]\n{question}\n\n[The Start of Assistant A's Answer]\n{answer_a}\n[The End of Assistant A's Answer]\n\n[The Start of Assistant B's Answer]\n{answer_b}\n[The End of Assistant B's Answer]\n\n[The Start of Assistant C's Answer]\n{answer_c}\n[The End of Assistant C's Answer]\n\n[The Start of Assistant D's Answer]\n{answer_d}\n[The End of Assistant D's Answer]"
 
+MTBENCH_REWARDBENCH_v2_TIES_SYSTEM_PROMPT = ""
+
+MTBENCH_REWARDBENCH_v2_TIES_USER_PROMPT = """
+### Task Description
+Please act as an impartial judge and evaluate the quality of the response provided by an
+AI assistant to the user query displayed below.
+
+Notes:
+1- Your evaluation should consider factors such as the helpfulness, relevance, and accuracy of the response, but need not consider depth or level of detail of the response.
+2- Begin your evaluation by providing a short explanation.
+3- Be as objective as possible. After providing your explanation, please rate the response on a scale of 1 to 10. For your rating, only give a number between 1 and 10 (inclusive), do not use any markdown, and do not put any text after your final rating.
+
+[Query]
+{prompt}
+
+[Response]
+{completion}
+
+[Your judgement]"""
+
+
 def find_first_difference(str1, str2):
     """
     Find the index of the first character that differs between two strings.
@@ -316,6 +338,33 @@ def apply_prompt_templates(example, prompt_type: str) -> dict:
         "messages": messages,
     }
 
+def apply_prompt_templates_rewardbench_v2_ties(example, prompt_type: str) -> dict:
+    """
+    Generate system_prompt and user_prompt for given prompt type
+    Returns a dictionary with these new columns
+    """
+    if prompt_type == "rewardbench_v2_mtbench":
+        num_answers = len(example['answers'])
+        example['messages'] = []
+
+        for i in range(num_answers):
+            system_prompt = MTBENCH_REWARDBENCH_v2_TIES_SYSTEM_PROMPT
+            user_prompt = MTBENCH_REWARDBENCH_v2_TIES_USER_PROMPT.format(
+                prompt=example['prompt'],
+                completion=example['answers'][i]
+            )
+
+            message = [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt}
+                ]
+            example['messages'].append(message)
+    else:
+        raise ValueError(f"Unknown prompt type: {prompt_type}")
+    
+
+    return example
+
 def load_inf2_dataset(data_paths):
     datasets = []
     
@@ -454,13 +503,52 @@ def load_rewardbench_v2_dataset(data_paths):
             ]
         }
 
+    def format_ratings(batch, is_ties=True):
+        """Format batch for ratings-based evaluation"""
+        num_chosen = len(batch["chosen"])
+        num_rejected = len(batch["rejected"])
+
+        batch["text_chosen"] = []
+        for i in range(num_chosen):
+            batch["text_chosen"].append(
+                [
+                    {"role": "user", "content": batch["prompt"]},
+                    {"role": "assistant", "content": batch["chosen"][i]}
+                ]
+            )
+        batch["text_rejected"] = []
+        for i in range(num_rejected):
+            batch["text_rejected"].append(
+                [
+                    {"role": "user", "content": batch["prompt"]},
+                    {"role": "assistant", "content": batch["rejected"][i]}
+                ]
+            )
+
+        prompt = batch["text_chosen"][0][0]  # Get the user question
+
+        # Combine chosen and rejected answers
+        # texts_chosen is [[messages]], texts_rejected is [messages, messages, messages]
+        all_answers = batch["text_chosen"] + batch["text_rejected"]  # Remove the extra [0] indexing
+
+        # Format each answer for rating
+        formatted_answers = []
+        for answer in all_answers:
+            answer_text = answer[1]  # Get the assistant's response
+            formatted_answers.append(answer_text)
+
+        batch["prompt"] = prompt
+        batch["answers"] = formatted_answers
+        return batch
     
     # Filter the dataset to exclude examples where 'subset' is 'Ties'
     main_dataset = raw_dataset.filter(lambda example: example['subset'] != 'Ties')
-    # ties_dataset = raw_dataset.filter(lambda example: example['subset'] == 'Ties')
+    ties_dataset = raw_dataset.filter(lambda example: example['subset'] == 'Ties')
     # Apply the transformation
     main_dataset = main_dataset.map(format_conversation)  
-    return main_dataset
+    ties_dataset = ties_dataset.map(format_ratings)
+
+    return main_dataset, ties_dataset
 
 def load_datasets(args) -> Tuple[Dataset, List[str]]:
     """Load datasets with subset tracking"""
@@ -474,11 +562,12 @@ def load_datasets(args) -> Tuple[Dataset, List[str]]:
     elif args.dataset == "rm_bench_set":
         raw_dataset = load_rm_bench_dataset(args)
     elif args.dataset == "rewardbench_v2_set":
-        raw_dataset = load_rewardbench_v2_dataset(REWARDBENCH_v2_SET)
+        raw_dataset, ties_dataset = load_rewardbench_v2_dataset(REWARDBENCH_v2_SET)
     else:
         raise ValueError(f"set_name {args.dataset} cannot be found")
 
     if args.dataset == "rewardbench_v2_set":
+        # prompt is different and ties_dataset
         formatted_dataset = generate_prompt_response_rewardbench_v2(raw_dataset, set_name=args.dataset, swap=False)
     else:
         # swap is only utilized for judgebench
@@ -486,11 +575,10 @@ def load_datasets(args) -> Tuple[Dataset, List[str]]:
     filtered_dataset = formatted_dataset.filter(lambda x: filter_long_turns(x, args.max_turns))
     # Apply to your dataset
     dataset = filtered_dataset.map(lambda x: apply_prompt_templates(x, args.prompt_type), batched=False)
-        
-    # Debug: select certain samples
-    # take column subset from dataset
     subsets = dataset["subset"]
-
+    if args.dataset == "rewardbench_v2_set":
+        ties_dataset = ties_dataset.map(lambda x: apply_prompt_templates_rewardbench_v2_ties(x, args.prompt_type), batched=False)
+        return dataset, subsets, ties_dataset
     return dataset, subsets
 
 import torch
@@ -593,6 +681,20 @@ class vLLMInferenceEngine:
         # responses = self.llm.generate(prompts, sampling_params=self.sampling_params)
 
         return responses
+    
+    def batch_predict_ties(self, dataset: Dataset, use_chat_template: bool = False) -> Dataset:
+        """Run batch prediction with either chat template or traditional prompt system"""
+        all_responses = []
+        # Optional: Add a progress bar for prompt preparation if dataset is large
+        for example in tqdm(dataset, desc="Preparing prompts"):
+            prompts = []
+            for message in example['messages']:
+                prompt = self.format_chat_prompt(message) if use_chat_template else message
+                prompts.append(prompt)
+            responses = self.generate(prompts)
+            all_responses.append(responses)
+
+        return all_responses
 
 def output_parser(example, prompt_type):
     judgment = example['evaluation']
@@ -677,16 +779,30 @@ def output_parser(example, prompt_type):
         else:
             return "error" # no boxed score found in the Ranking Score section
     elif prompt_type in ["rewardbench_v2_mtbench"]:
-        if "[[A]]" in judgment:
-            return "1"
-        elif "[[B]]" in judgment:
-            return "2"
-        elif "[[C]]" in judgment:
-            return "3"
-        elif "[[D]]" in judgment:
-            return "4"
-        else:
-            return "error"
+        # deal with dataset
+        if isinstance(judgment, str):
+            if "[[A]]" in judgment:
+                return "1"
+            elif "[[B]]" in judgment:
+                return "2"
+            elif "[[C]]" in judgment:
+                return "3"
+            elif "[[D]]" in judgment:
+                return "4"
+            else:
+                return "error"
+        elif len(judgment) > 1:
+            scores = []
+            for raw_judgment in judgment:
+                m = re.search(r"\b([1-9]|10)\b\s*$", raw_judgment.strip())
+                if m:
+                    rating = int(m.group(1))
+                    if 1 <= rating <= 10:
+                        scores.append(rating)
+                    else:
+                        scores.append("error") # may cause problems for downstream tasks
+            return scores
+
     else:
         raise ValueError(f"The model parser is not defined")
 
@@ -827,6 +943,8 @@ def evaluation(dataset, subsets, args):
         calculate_judgebench_accuracy_swap(dataset, subsets)
     elif args.dataset == "rm_bench_set":
         calculate_rm_bench_accuracy(dataset, subsets)
+    elif args.dataset == "rewardbench_v2_set":
+        print(f"TIES: {args.ties_score}")
 
 def setup_argparse() -> argparse.Namespace:
     """Set up argument parser"""
@@ -879,12 +997,19 @@ def main():
     args = setup_argparse()
     
     print("Loading dataset...")
-    dataset, subsets = load_datasets(args)
+    if args.dataset == "rewardbench_v2_set":
+        dataset, subsets, ties_dataset = load_datasets(args)
+        print(f"Loaded {len(ties_dataset)} samples from {args.dataset} TIES subset")
+    else:
+        dataset, subsets = load_datasets(args)
     print(f"Loaded {len(dataset)} samples from {args.dataset}")
     
     if args.debug and not args.swap:
         dataset = dataset.shuffle(seed=42).select(range(min(args.max_debug_examples, len(dataset))))
         #dataset = dataset.select(range(min(args.max_debug_examples, len(dataset))))
+        if args.dataset == "rewardbench_v2_set":
+            ties_dataset = ties_dataset.shuffle(seed=42).select(range(min(args.max_debug_examples, len(ties_dataset))))
+            print(f"Debug mode: Limited to {len(ties_dataset)} samples from TIES subset")
         print(f"Debug mode: Limited to {len(dataset)} samples")
 
     print("Initializing LLM...")
@@ -893,12 +1018,22 @@ def main():
     print("Running inference...")
     results = engine.batch_predict(dataset, args.use_chat_template)
     dataset = dataset.add_column('evaluation', results)
+    if args.dataset == "rewardbench_v2_set":
+        ties_results = engine.batch_predict_ties(ties_dataset, args.use_chat_template)
+        ties_dataset = ties_dataset.add_column('evaluation', ties_results)
 
     print("Parsing results...")
     answers = [output_parser(example, args.prompt_type) for example in dataset]
     dataset = dataset.add_column('answers', answers)
+    if args.dataset == "rewardbench_v2_set":
+        ties_answers = [output_parser(example, args.prompt_type) for example in ties_dataset]
+        ties_dataset = ties_dataset.add_column('scores', ties_answers)
+
     # Apply the function to the dataset
     dataset = dataset.map(process_example, fn_kwargs={"prompt_type": args.prompt_type})
+    if args.dataset == "rewardbench_v2_set":
+        ties_dataset, ties_score = process_single_model(ties_dataset)
+        args.ties_score = ties_score
 
     print("Evaluation...")
     evaluation(dataset, subsets, args)

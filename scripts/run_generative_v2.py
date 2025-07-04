@@ -597,6 +597,7 @@ def main():
         # Process ties dataset with ratings (mandatory)
         logger.info("*** Run inference on Ties subset with ratings ***")
         ties_dataset_formatted = ties_dataset.map(format_ratings, fn_kwargs={"is_ties": True})
+
         results_ties = []
         for i, batch in enumerate(ties_dataset_formatted):
             if args.debug and i % 10 == 0:
