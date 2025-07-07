@@ -25,7 +25,7 @@ JUDGEBENCH_SET = "ScalerLab/JudgeBench"
 RM_BENCH_SET = "THU-KEG/RM-Bench"
 REWARDBENCH_v2_SET = "allenai/reward-bench-2"
 
-HELPSTEER3_PRINCIPLES_SYSTEM_PROMPT = (
+HELPSTEER3_SYSTEM_PROMPT = (
     "You are a skilled little expert at scoring responses. "
     "You should evaluate given responses based on the given judging criteria.\n"
     "Given the context of the conversation (the last turn is the User's query) and two responses from the Assistant, "
@@ -69,7 +69,7 @@ HELPSTEER3_PRINCIPLES_SYSTEM_PROMPT = (
     "5 = Response 2 is better than Response 1\n"
     "6 = Response 2 is much better than Response 1\n"
 )
-HELPSTEER3_PRINCIPLES_USER_PROMPT = (
+HELPSTEER3_USER_PROMPT = (
     "#### Conversation Context ####\n"
     "{Query}\n"
     "#### Responses to be Scored ####\n"
@@ -161,21 +161,9 @@ GENERIC_CONVERSATIONAL_INTELLIGENCE_USER_PROMPT = (
     "[The End of Ranking Score]\n"
 )
 
-MTBENCH_REWARDBENCH_v2_SYSTEM_PROMPT = (
-    "Please act as an impartial judge and evaluate the quality of the responses provided by four AI assistants to the user question displayed below. "
-    "You should choose the assistant that follows the user's instructions and answers the user's question best. Your evaluation should consider "
-    "factors such as the helpfulness, relevance, accuracy, depth, creativity, and level of detail of their responses. Begin your evaluation by "
-    "comparing the four responses and provide a short explanation. Avoid any position biases and ensure that the order in which the responses were "
-    "presented does not influence your decision. Do not allow the length of the responses to influence your evaluation. Do not favor certain names "
-    "of the assistants. Be as objective as possible. After providing your explanation, output your final verdict by strictly following this format: "
-    '"[[A]]" if assistant A is best, "[[B]]" if assistant B is best, "[[C]]" if assistant C is best, and "[[D]]" if assistant D is best.'
-)
+TIES_SYSTEM_PROMPT = ""
 
-MTBENCH_REWARDBENCH_v2_USER_PROMPT = "[User Question]\n{question}\n\n[The Start of Assistant A's Answer]\n{answer_a}\n[The End of Assistant A's Answer]\n\n[The Start of Assistant B's Answer]\n{answer_b}\n[The End of Assistant B's Answer]\n\n[The Start of Assistant C's Answer]\n{answer_c}\n[The End of Assistant C's Answer]\n\n[The Start of Assistant D's Answer]\n{answer_d}\n[The End of Assistant D's Answer]"
-
-MTBENCH_REWARDBENCH_v2_TIES_SYSTEM_PROMPT = ""
-
-MTBENCH_REWARDBENCH_v2_TIES_USER_PROMPT = """
+TIES_USER_PROMPT = """
 ### Task Description
 Please act as an impartial judge and evaluate the quality of the response provided by an
 AI assistant to the user query displayed below.
@@ -296,73 +284,84 @@ def generate_prompt_response_rewardbench_v2(dataset, set_name, swap=False):
 def filter_long_turns(batch, max_turns):
     return len(batch["text_chosen"]) // 2 <= max_turns
 
-def apply_prompt_templates(example, prompt_type: str) -> dict:
+def apply_prompt_templates(example, args) -> dict:
     """
     Generate system_prompt and user_prompt for given prompt type
     Returns a dictionary with these new columns
     """
-    if prompt_type == "helpsteer3":
-        system_prompt = HELPSTEER3_PRINCIPLES_SYSTEM_PROMPT
-        user_prompt = HELPSTEER3_PRINCIPLES_USER_PROMPT.format(
-            Query=example['prompt'],
-            Response_1=example['response1'],
-            Response_2=example['response2'],
-        )
-    elif prompt_type == "generic_conversational_intellegence":
+    # Determine the base prompts based on prompt_type
+    if args.prompt_type == "helpsteer3":
+        system_prompt = HELPSTEER3_SYSTEM_PROMPT
+        user_prompt_template = HELPSTEER3_USER_PROMPT
+    elif args.prompt_type == "generic_conversational_intellegence":
         system_prompt = GENERIC_CONVERSATIONAL_INTELLIGENCE_SYSTEM_PROMPT
-        user_prompt = GENERIC_CONVERSATIONAL_INTELLIGENCE_USER_PROMPT.format(
+        user_prompt_template = GENERIC_CONVERSATIONAL_INTELLIGENCE_USER_PROMPT
+    else:
+        raise ValueError(f"Unknown prompt type: {args.prompt_type}")
+
+    # Handle non-rewardbench_v2_set case
+    if args.dataset != "rewardbench_v2_set":
+        user_prompt = user_prompt_template.format(
             Query=example['prompt'],
             Response_1=example['response1'],
             Response_2=example['response2'],
         )
-    elif prompt_type == "rewardbench_v2_mtbench":
-        system_prompt = MTBENCH_REWARDBENCH_v2_SYSTEM_PROMPT
-        user_prompt = MTBENCH_REWARDBENCH_v2_USER_PROMPT.format(
-            question=example['prompt'],
-            answer_a=example['response1'],
-            answer_b=example['response2'],
-            answer_c=example['response3'],
-            answer_d=example['response4'],
-        )
+        messages = [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt}
+        ]
+        return {
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "messages": messages,
+        }
     else:
-        raise ValueError(f"Unknown prompt type: {prompt_type}")
-    
-    messages = [
-        {'role': 'system', 'content': system_prompt},
-        {'role': 'user', 'content': user_prompt}
-    ]
+        # Handle rewardbench_v2_set case
+        response_pairs = [
+            ('12', 'response1', 'response2'),
+            ('34', 'response3', 'response4'),
+            ('13', 'response1', 'response3'),
+            ('14', 'response1', 'response4'),
+            ('23', 'response2', 'response3'),
+            ('24', 'response2', 'response4')
+        ]
 
-    return {
-        "system_prompt": system_prompt,
-        "user_prompt": user_prompt,
-        "messages": messages,
-    }
-
-def apply_prompt_templates_rewardbench_v2_ties(example, prompt_type: str) -> dict:
-    """
-    Generate system_prompt and user_prompt for given prompt type
-    Returns a dictionary with these new columns
-    """
-    if prompt_type == "rewardbench_v2_mtbench":
-        num_answers = len(example['answers'])
-        example['messages'] = []
-
-        for i in range(num_answers):
-            system_prompt = MTBENCH_REWARDBENCH_v2_TIES_SYSTEM_PROMPT
-            user_prompt = MTBENCH_REWARDBENCH_v2_TIES_USER_PROMPT.format(
-                prompt=example['prompt'],
-                completion=example['answers'][i]
+        result = {"system_prompt": system_prompt}
+        
+        for suffix, resp1, resp2 in response_pairs:
+            user_prompt = user_prompt_template.format(
+                Query=example['prompt'],
+                Response_1=example[resp1],
+                Response_2=example[resp2],
             )
-
-            message = [
+            result[f"user_prompt_{suffix}"] = user_prompt
+            result[f"messages_{suffix}"] = [
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': user_prompt}
-                ]
-            example['messages'].append(message)
-    else:
-        raise ValueError(f"Unknown prompt type: {prompt_type}")
-    
+            ]
 
+        return result
+
+def apply_prompt_templates_rewardbench_v2_ties(example, args) -> dict:
+    """
+    Generate system_prompt and user_prompt for given prompt type
+    Returns a dictionary with these new columns
+    """
+    num_answers = len(example['answers'])
+    example['messages'] = []
+
+    for i in range(num_answers):
+        system_prompt = TIES_SYSTEM_PROMPT
+        user_prompt = TIES_USER_PROMPT.format(
+            prompt=example['prompt'],
+            completion=example['answers'][i]
+        )
+
+        message = [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt}
+            ]
+        example['messages'].append(message)
     return example
 
 def load_inf2_dataset(data_paths):
@@ -574,10 +573,10 @@ def load_datasets(args) -> Tuple[Dataset, List[str]]:
         formatted_dataset = generate_prompt_response(raw_dataset, set_name=args.dataset, swap=args.swap)
     filtered_dataset = formatted_dataset.filter(lambda x: filter_long_turns(x, args.max_turns))
     # Apply to your dataset
-    dataset = filtered_dataset.map(lambda x: apply_prompt_templates(x, args.prompt_type), batched=False)
+    dataset = filtered_dataset.map(lambda x: apply_prompt_templates(x, args), batched=False)
     subsets = dataset["subset"]
     if args.dataset == "rewardbench_v2_set":
-        ties_dataset = ties_dataset.map(lambda x: apply_prompt_templates_rewardbench_v2_ties(x, args.prompt_type), batched=False)
+        ties_dataset = ties_dataset.map(lambda x: apply_prompt_templates_rewardbench_v2_ties(x, args), batched=False)
         return dataset, subsets, ties_dataset
     return dataset, subsets
 
@@ -670,148 +669,142 @@ class vLLMInferenceEngine:
         
         return all_outputs
 
-    def batch_predict(self, dataset: Dataset, use_chat_template: bool = False) -> Dataset:
+    def batch_predict(self, dataset: Dataset, args) -> Dataset:
         """Run batch prediction with either chat template or traditional prompt system"""
-        prompts = []
-        # Optional: Add a progress bar for prompt preparation if dataset is large
-        for example in tqdm(dataset, desc="Preparing prompts"):
-            prompt = self.format_chat_prompt(example['messages']) if use_chat_template else example['prompt']
-            prompts.append(prompt)
-        responses = self.generate(prompts)
-        # responses = self.llm.generate(prompts, sampling_params=self.sampling_params)
+        if args.dataset != "rewardbench_v2_set":
+            prompts = []
+            # Optional: Add a progress bar for prompt preparation if dataset is large
+            for example in tqdm(dataset, desc="Preparing prompts"):
+                prompt = self.format_chat_prompt(example['messages']) if args.use_chat_template else example['messages']
+                prompts.append(prompt)
+            responses = self.generate(prompts)
+            # responses = self.llm.generate(prompts, sampling_params=self.sampling_params)
+            return responses, [None] * len(responses)
+        else:
+            prompts_12, prompts_34 = [], []
+            # Optional: Add a progress bar for prompt preparation if dataset is large
+            for example in tqdm(dataset, desc="Preparing prompts"):
+                prompt_12 = self.format_chat_prompt(example['messages_12']) if args.use_chat_template else example['messages_12']
+                prompts_12.append(prompt_12)
+                prompt_34 = self.format_chat_prompt(example['messages_34']) if args.use_chat_template else example['messages_34']
+                prompts_34.append(prompt_34)
+            responses_12 = self.generate(prompts_12)
+            responses_34 = self.generate(prompts_34)
+            dataset = dataset.add_column('evaluation', responses_12)
+            answers_12 = [output_parser(example, args) for example in dataset]
+            dataset = dataset.remove_columns('evaluation')
+            dataset = dataset.add_column('evaluation', responses_34)
+            answers_34 = [output_parser(example, args) for example in dataset]
+            dataset = dataset.remove_columns('evaluation')
 
-        return responses
+            prompts, candidates = [], []
+            for example, ans_12, ans_34 in tqdm(zip(dataset, answers_12, answers_34), 
+                                     total=len(dataset), 
+                                     desc="Preparing prompts"):
+                if ans_12 == "A" and ans_34 == "A":
+                    message = example['messages_13']
+                    candidate = ['1', '3']
+                elif ans_12 == "A" and ans_34 == "B":
+                    message = example['messages_14']
+                    candidate = ['1', '4']
+                elif ans_12 == "B" and ans_34 == "A":
+                    message = example['messages_23']
+                    candidate = ['2', '3']
+                elif ans_12 == "B" and ans_34 == "B":
+                    message = example['messages_24']
+                    candidate = ['2', '4']
+                else:
+                    # random
+                    message = "error"
+                    candidate = ['1', '2']
+
+                prompt = self.format_chat_prompt(message) if args.use_chat_template else message
+                prompts.append(prompt)
+                candidates.append(candidate)
+            responses = self.generate(prompts)
+
+            return responses, candidates
     
-    def batch_predict_ties(self, dataset: Dataset, use_chat_template: bool = False) -> Dataset:
+    def batch_predict_ties(self, dataset: Dataset, args) -> Dataset:
         """Run batch prediction with either chat template or traditional prompt system"""
         all_responses = []
         # Optional: Add a progress bar for prompt preparation if dataset is large
         for example in tqdm(dataset, desc="Preparing prompts"):
             prompts = []
             for message in example['messages']:
-                prompt = self.format_chat_prompt(message) if use_chat_template else message
+                prompt = self.format_chat_prompt(message) if args.use_chat_template else message
                 prompts.append(prompt)
             responses = self.generate(prompts)
             all_responses.append(responses)
 
         return all_responses
 
-def output_parser(example, prompt_type):
+import re
+from typing import Optional
+
+def output_parser(example, args):
     judgment = example['evaluation']
+    subset = example['subset']
+    prompt_type = args.prompt_type
+    
+    if subset != 'Ties' and prompt_type in ["helpsteer3", "generic_conversational_intellegence"]:
+        # Helper functions for boxed string processing
+        def find_boxed_string(s: str, pattern: str, first: bool = True) -> Optional[str]:
+            matches = list(re.finditer(pattern, s))
+            return matches[0].group(0) if matches else None
 
-    if prompt_type in ["helpsteer3", "generic_conversational_intellegence", "helpsteer3_principles"]:
-        # Standardized extraction with verl-private/verl/utils/reward_score/inf1_pie_platform.py
+        def last_boxed_only_string(s: str) -> Optional[str]:
+            return find_boxed_string(s, r"\\boxed\{\{?[^,{}]+\}?\}", first=False)
 
-        def find_boxed_string(string: str, pattern: str, first: bool = True) -> Optional[str]:
-            """Extract the first or last LaTeX boxed expression matching a regex pattern from a string.
-
-            Args:
-                string: Input string containing LaTeX code
-                pattern: Regex pattern to match boxed expressions
-                first: If True, return the first match; if False, return the last match
-
-            Returns:
-                The matched boxed expression or None if not found
-            """
-            matches = list(re.finditer(pattern, string))
-            if not matches:
+        def remove_boxed(s: str) -> Optional[str]:
+            if not s or not s.startswith("\\boxed{") or not s.endswith("}"):
                 return None
-            return matches[0].group(0) if first else matches[-1].group(0)
+            inner = s[7:-1]  # Remove \boxed{}
+            return inner[1:-1] if inner.startswith("{") and inner.endswith("}") else inner
 
-        def last_boxed_only_string(string: str) -> Optional[str]:
-            """Extract the last LaTeX boxed expression (single or double curly braces) from a string.
-
-            Args:
-                string: Input string containing LaTeX code
-
-            Returns:
-                The last boxed expression or None if not found
-            """
-            # Accepts \boxed{...} or \boxed{{...}}
-            return find_boxed_string(string, r"\\boxed\{\{?[^,{}]+\}?\}", first=False)
-            # return find_boxed_string(string, r'boxed\{(-?\d+)\}', first=False)
-
-        def remove_boxed(s: str) -> str:
-            """Remove the LaTeX boxed command with single or double curly braces from a string.
-
-            Supports both single and pair boxed expressions (e.g., '\boxed{x}', '\boxed{x, y}', '\boxed{{x}}', or '\boxed{{x, y}}').
-
-            Args:
-                s: String with format "\\boxed{content}" or "\\boxed{{content}}"
-
-            Returns:
-                The content inside the boxed command
-            """
-            if s is None:
-                return None
-            left = "\\boxed{"
-            right = "}"
-            if not (s.startswith(left) and s.endswith(right)):
-                return None
-            inner = s[len(left):-len(right)]
-            # If wrapped in extra curly braces, remove them
-            if inner.startswith("{") and inner.endswith("}"):
-                inner = inner[1:-1]
-            return inner
+        # Extract ranking score section
+        pattern = re.compile(r"\\?\[The Begin of Ranking Score\\?\](.*?)\\?\[The End of Ranking Score\\?\]", re.DOTALL)
+        match = re.search(pattern, judgment)
+        if not match:
+            return "error"
+            
+        ranking_section = match.group(1)
+        boxed_pred = last_boxed_only_string(ranking_section) if ranking_section else None
+        extracted_score = remove_boxed(boxed_pred) if boxed_pred else None
         
-        pattern = re.compile(
-            r"\\?\[The Begin of Ranking Score\\?\](.*?)\s*"
-            r"\\?\[The End of Ranking Score\\?\]",
-            re.DOTALL
-        )
-        match_result = re.search(pattern, judgment)
-        if match_result is not None:
-            ranking_score_section = match_result.group(1)
-        else:
-            #print(f"DEBUG: judgment: {judgment}")
-            #print(f"DEBUG: match_result: {match_result}")
-            return "error"  # no ranking score section found
-        preference_ranking_boxed_pred = last_boxed_only_string(ranking_score_section) if ranking_score_section is not None else None
-        preference_ranking_extracted_pred = remove_boxed(preference_ranking_boxed_pred) if preference_ranking_boxed_pred is not None else None
-        if preference_ranking_extracted_pred:
-            score = int(preference_ranking_extracted_pred)
-            if score <= 3: # 3 is the threshold for helpsteer3
-                return "A"
-            elif score > 3: # 3 is the threshold for helpsteer3
-                return "B"
+        if not extracted_score:
+            return "error"
+            
+        try:
+            score = int(extracted_score)
+            if args.dataset == "rewardbench_v2_set" and 'candidates' in example:
+                return example['candidates'][0] if score <= 3 else example['candidates'][1]
             else:
-                return "error"
-        else:
-            return "error" # no boxed score found in the Ranking Score section
-    elif prompt_type in ["rewardbench_v2_mtbench"]:
-        # deal with dataset
-        if isinstance(judgment, str):
-            if "[[A]]" in judgment:
-                return "1"
-            elif "[[B]]" in judgment:
-                return "2"
-            elif "[[C]]" in judgment:
-                return "3"
-            elif "[[D]]" in judgment:
-                return "4"
-            else:
-                return "error"
-        elif len(judgment) > 1:
-            scores = []
-            for raw_judgment in judgment:
-                m = re.search(r"\b([1-9]|10)\b\s*$", raw_judgment.strip())
-                if m:
-                    rating = int(m.group(1))
-                    if 1 <= rating <= 10:
-                        scores.append(rating)
-                    else:
-                        scores.append("error") # may cause problems for downstream tasks
-            return scores
+                return "A" if score <= 3 else "B"
+        except ValueError:
+            return "error"
 
-    else:
-        raise ValueError(f"The model parser is not defined")
+    elif subset == 'Ties' and prompt_type in ["helpsteer3", "generic_conversational_intellegence"]:
+        # Process TIES dataset
+        scores = []
+        for j in judgment:
+            match = re.search(r"\b([1-9]|10)\b\s*$", j.strip())
+            if match:
+                try:
+                    rating = int(match.group(1))
+                    scores.append(rating if 1 <= rating <= 10 else "error")
+                except ValueError:
+                    scores.append("error")
+        return scores
+
+    raise ValueError("The model parser is not defined")
 
 # Iterate through the dataset and apply the logic
-def process_example(example, prompt_type):
+def process_example(example, args):
     answer = example['answers']  # replace with your answer column name
     is_shuffled = example['is_shuffled']  # replace with your is_shuffled column name
     
-    if prompt_type in ['helpsteer3', 'generic_conversational_intellegence']:
+    if args.prompt_type in ['helpsteer3', 'generic_conversational_intellegence'] and args.dataset != 'rewardbench_v2_set':
         if (answer == 'A' and not is_shuffled) or (answer == 'B' and is_shuffled):
             return {'score': 1}
         elif (answer == 'A' and is_shuffled) or (answer == 'B' and not is_shuffled):
@@ -819,7 +812,7 @@ def process_example(example, prompt_type):
         else:
             # return {'score': 0.5} remove this impact
             return {'score': 0}
-    elif prompt_type in ['rewardbench_v2_mtbench']:
+    elif args.prompt_type in ['helpsteer3', 'generic_conversational_intellegence'] and args.dataset == 'rewardbench_v2_set':
         if answer == is_shuffled:
             return {'score': 1}
         else:
@@ -963,7 +956,7 @@ def setup_argparse() -> argparse.Namespace:
     
     # New prompt selection argument
     parser.add_argument('--prompt_type', type=str, required=True,
-                       choices=['helpsteer3', 'generic_conversational_intellegence', 'rewardbench_v2_mtbench'],
+                       choices=['helpsteer3', 'generic_conversational_intellegence'],
                        help='Type of prompt template to use')
     
     # New GPU control argument
@@ -1016,21 +1009,24 @@ def main():
     engine = vLLMInferenceEngine(args)
 
     print("Running inference...")
-    results = engine.batch_predict(dataset, args.use_chat_template)
+    results, candidates = engine.batch_predict(dataset, args)
     dataset = dataset.add_column('evaluation', results)
     if args.dataset == "rewardbench_v2_set":
-        ties_results = engine.batch_predict_ties(ties_dataset, args.use_chat_template)
+        dataset = dataset.add_column('candidates', candidates)
+
+    if args.dataset == "rewardbench_v2_set":
+        ties_results = engine.batch_predict_ties(ties_dataset, args)
         ties_dataset = ties_dataset.add_column('evaluation', ties_results)
 
     print("Parsing results...")
-    answers = [output_parser(example, args.prompt_type) for example in dataset]
+    answers = [output_parser(example, args) for example in dataset]
     dataset = dataset.add_column('answers', answers)
     if args.dataset == "rewardbench_v2_set":
-        ties_answers = [output_parser(example, args.prompt_type) for example in ties_dataset]
+        ties_answers = [output_parser(example, args) for example in ties_dataset]
         ties_dataset = ties_dataset.add_column('scores', ties_answers)
 
     # Apply the function to the dataset
-    dataset = dataset.map(process_example, fn_kwargs={"prompt_type": args.prompt_type})
+    dataset = dataset.map(process_example, fn_kwargs={"args": args})
     if args.dataset == "rewardbench_v2_set":
         ties_dataset, ties_score = process_single_model(ties_dataset)
         args.ties_score = ties_score
