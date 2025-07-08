@@ -15,6 +15,7 @@ from rewardbench.constants import EXAMPLE_COUNTS, SUBSET_MAPPING
 from rewardbench.utils import calculate_scores_per_section
 from itertools import product
 from rewardbench import process_single_model
+from datetime import datetime
 
 INF2_SETS = [
     "/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
@@ -823,10 +824,10 @@ def process_example(example, args):
 def calculate_judgebench_accuracy_swap(dataset, subsets):
     print("###\nThe start of swap analysis\n###\n")
     # print per subset and log into results_grouped file
-    present_subsets = np.unique(subsets)
+    sources = ["mmlu-pro", "livebench-reasoning", "livebench-math", "livecodebench", ""]
     results_grouped = {}
-    for subset in present_subsets:
-        subset_dataset = dataset.filter(lambda example: example["subset"] == subset)
+    for subset in sources:
+        subset_dataset = dataset.filter(lambda example: example["subset"].startswith(subset))
         scores = subset_dataset["score"]
         num_total = len(scores)
 
@@ -865,6 +866,7 @@ def calculate_judgebench_accuracy_swap(dataset, subsets):
         print(f"Both correct: {both_correct}/{total_pairs} ({both_correct/total_pairs if total_pairs > 0 else 0})")
         print(f"Both wrong: {both_wrong}/{total_pairs} ({both_wrong/total_pairs if total_pairs > 0 else 0})")
         print(f"One correct one wrong: {one_correct_one_wrong}/{total_pairs} ({one_correct_one_wrong/total_pairs if total_pairs > 0 else 0})")
+    return results_grouped
 
 def calculate_rm_bench_accuracy(dataset, subsets):
     hard_indices = [1, 2, 5]
@@ -904,18 +906,57 @@ def calculate_rm_bench_accuracy(dataset, subsets):
                 overall_counts[2] += example['score']
                 overall_totals[2] += 1
 
+        # Store results for this subset
+        results_grouped[subset] = {
+            'hard': {
+                'correct': counts[0],
+                'total': num_examples[0],
+                'accuracy': counts[0]/num_examples[0] if num_examples[0] > 0 else 0
+            },
+            'normal': {
+                'correct': counts[1],
+                'total': num_examples[1],
+                'accuracy': counts[1]/num_examples[1] if num_examples[1] > 0 else 0
+            },
+            'easy': {
+                'correct': counts[2],
+                'total': num_examples[2],
+                'accuracy': counts[2]/num_examples[2] if num_examples[2] > 0 else 0
+            }
+        }
+
         print(f"Subset {subset}:")
         print(f"  Hard accuracy: {counts[0]}/{num_examples[0]} ({counts[0]/num_examples[0] if num_examples[0] > 0 else 0})")
         print(f"  Normal accuracy: {counts[1]}/{num_examples[1]} ({counts[1]/num_examples[1] if num_examples[1] > 0 else 0})")
         print(f"  Easy accuracy: {counts[2]}/{num_examples[2]} ({counts[2]/num_examples[2] if num_examples[2] > 0 else 0})")
         print()
     
+    # Store overall results
+    results_grouped['overall'] = {
+        'hard': {
+            'correct': overall_counts[0],
+            'total': overall_totals[0],
+            'accuracy': overall_counts[0]/overall_totals[0] if overall_totals[0] > 0 else 0
+        },
+        'normal': {
+            'correct': overall_counts[1],
+            'total': overall_totals[1],
+            'accuracy': overall_counts[1]/overall_totals[1] if overall_totals[1] > 0 else 0
+        },
+        'easy': {
+            'correct': overall_counts[2],
+            'total': overall_totals[2],
+            'accuracy': overall_counts[2]/overall_totals[2] if overall_totals[2] > 0 else 0
+        }
+    }
+    
     # Print overall dataset statistics
     print("Overall dataset:")
     print(f"  Hard accuracy: {overall_counts[0]}/{overall_totals[0]} ({overall_counts[0]/overall_totals[0] if overall_totals[0] > 0 else 0})")
     print(f"  Normal accuracy: {overall_counts[1]}/{overall_totals[1]} ({overall_counts[1]/overall_totals[1] if overall_totals[1] > 0 else 0})")
-    print(f"  Easy accuracy: {overall_counts[2]}/{overall_totals[2]} ({overall_counts[2]/overall_totals[2] if overall_totals[2] > 0 else 0})")
-
+    print(f"  Easy accuracy: {overall_counts[2]}/{overall_totals[2]} ({overall_counts[2]/overall_totals[2] if overall_totals[2] > 0 else 0})")    
+    return results_grouped
+    
 def evaluation(dataset, subsets, args):
     # print per subset and log into results_grouped file
     present_subsets = np.unique(subsets)
@@ -932,12 +973,17 @@ def evaluation(dataset, subsets, args):
     if args.dataset == "rewardbench_v1_set":
         results_leaderboard = calculate_scores_per_section(EXAMPLE_COUNTS, SUBSET_MAPPING, results_grouped)
         print(f"rewardbench_v1_leadboard: {results_leaderboard}")
+        results_grouped.update(results_leaderboard)
     elif (args.dataset == "judgebench_gpt_set" or args.dataset == "judgebench_claude_set") and args.swap:
-        calculate_judgebench_accuracy_swap(dataset, subsets)
+        results_leaderboard = calculate_judgebench_accuracy_swap(dataset, subsets)
+        results_grouped.update(results_leaderboard)
     elif args.dataset == "rm_bench_set":
-        calculate_rm_bench_accuracy(dataset, subsets)
+        results_leaderboard = calculate_rm_bench_accuracy(dataset, subsets)
+        results_grouped.update(results_leaderboard)
     elif args.dataset == "rewardbench_v2_set":
         print(f"TIES: {args.ties_score}")
+        results_grouped["TIES"] = args.ties_score
+    return results_grouped
 
 def setup_argparse() -> argparse.Namespace:
     """Set up argument parser"""
@@ -982,9 +1028,39 @@ def setup_argparse() -> argparse.Namespace:
                        help='Enable debug mode (limit samples)')
     parser.add_argument('--max_debug_examples', type=int, default=10240,
                        help='Maximum debug examples')
-                       
+    
+    # New argument for specifying complete output file path
+    parser.add_argument('--output_file', type=str, default=None,
+                       help='Complete path for output JSON file (including filename). '
+                            'If not specified, will generate automatically in results/ directory')
     
     return parser.parse_args()
+
+def save_results(results, model_name, prompt_type, output_file=None):
+    """Save evaluation results to a JSON file.
+    If output_file is specified, uses that path exactly.
+    Otherwise generates a filename automatically in results/ directory."""
+    import os
+    from datetime import datetime
+    
+    if output_file is None:
+        # Create results directory if it doesn't exist
+        os.makedirs("results", exist_ok=True)
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"results/results_{model_name.replace('/', '_')}_{prompt_type}_{timestamp}.json"
+    else:
+        # Use the specified path exactly
+        filename = output_file
+        # Create parent directory if it doesn't exist
+        os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
+    
+    # Save results
+    with open(filename, "w") as f:
+        json.dump(results, f, indent=2)
+    
+    return filename
 
 def main():
     args = setup_argparse()
@@ -999,7 +1075,6 @@ def main():
     
     if args.debug and not args.swap:
         dataset = dataset.shuffle(seed=42).select(range(min(args.max_debug_examples, len(dataset))))
-        #dataset = dataset.select(range(min(args.max_debug_examples, len(dataset))))
         if args.dataset == "rewardbench_v2_set":
             ties_dataset = ties_dataset.shuffle(seed=42).select(range(min(args.max_debug_examples, len(ties_dataset))))
             print(f"Debug mode: Limited to {len(ties_dataset)} samples from TIES subset")
@@ -1032,9 +1107,21 @@ def main():
         args.ties_score = ties_score
 
     print("Evaluation...")
-    evaluation(dataset, subsets, args)
-
-    import pdb; pdb.set_trace()
+    return_values = evaluation(dataset, subsets, args)
+    
+    # Add metadata to results
+    return_values['metadata'] = {
+        'model': args.model,
+        'dataset': args.dataset,
+        'prompt_type': args.prompt_type,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    # Save results to file
+    results_file = save_results(return_values, args.model, args.prompt_type, args.output_file)
+    print(f"Results saved to {results_file}")
+    
+    return return_values
 
 if __name__ == "__main__":
     main()
