@@ -19,7 +19,8 @@ from datetime import datetime
 
 INF2_SETS = [
     "/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
-    "/mnt/vast/home/jimmy/data/inf2/rl/validation.parquet"
+    "/mnt/vast/home/jimmy/data/inf2/rl/validation.parquet",
+    "/mnt/vast/home/andy/data/inf1_eclairselfharm+core+support+justpi/annotations_pm_test.jsonl"
 ]
 REWARDBENCH_v1_SET = "allenai/reward-bench"
 JUDGEBENCH_SET = "ScalerLab/JudgeBench"
@@ -581,116 +582,159 @@ def load_datasets(args) -> Tuple[Dataset, List[str]]:
         return dataset, subsets, ties_dataset
     return dataset, subsets
 
-import torch
-from vllm import LLM, SamplingParams
-from typing import List
+import requests
+from tqdm import tqdm
+from typing import List, Dict, Optional, Union, Any
 from datasets import Dataset
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
-class vLLMInferenceEngine:
+class APIInferenceEngine:
     def __init__(self, args):
-        """Initialize vLLM with explicit GPU configuration"""
+        """Initialize API-based inference engine
+        
+        Args:
+            args: Should contain:
+                - api_url: URL of the API endpoint
+                - api_key: API key (optional)
+                - model: Model name to use
+                - temperature: Sampling temperature
+                - top_p: Top-p sampling value
+                - max_tokens: Maximum tokens to generate
+                - batch_size: Number of concurrent requests to make
+        """
         self.args = args
         
-        # Verify GPU availability and set device
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is not available. Please check your GPU setup.")
+        # Validate required arguments
+        if not hasattr(args, 'api_url'):
+            raise ValueError("api_url must be provided for API inference")
         
-        # Get number of available GPUs if not specified
-        if not hasattr(args, 'num_gpus') or args.num_gpus is None:
-            args.num_gpus = torch.cuda.device_count()
-            print(f"Automatically detected {args.num_gpus} GPUs")
+        # API configuration
+        self.api_url = args.api_url
+        self.api_key = getattr(args, 'api_key', None)
         
-        # Initialize LLM with explicit GPU configuration
-        self.llm = LLM(
-            model=args.model,
-            tensor_parallel_size=args.num_gpus,
-            tokenizer=args.tokenizer if hasattr(args, 'tokenizer') else None,
-            trust_remote_code=True,
-            gpu_memory_utilization=0.9,
-            dtype="auto"
-        )
+        # Set up headers
+        self.headers = {
+            "Content-Type": "application/json",
+        }
+        if self.api_key:
+            self.headers["Authorization"] = f"Bearer {self.api_key}"
         
-        self.sampling_params = SamplingParams(
-            n=1,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            max_tokens=args.max_tokens
-        )
-        
-        self.tokenizer = self.llm.get_tokenizer() if hasattr(self.llm, 'get_tokenizer') else None
-        self._print_gpu_info()
-    
-    def _print_gpu_info(self):
-        """Print GPU information for debugging"""
-        print(f"\nGPU Configuration:")
-        print(f"Available GPUs: {torch.cuda.device_count()}")
-        print(f"Using {self.args.num_gpus} GPUs")
-        for i in range(torch.cuda.device_count()):
-            print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
-        print()
-    
-    def format_chat_prompt(self, messages: List[dict]) -> Optional[str]:
-        """Apply chat template to format messages into a prompt string.
-        Returns None if the resulting prompt exceeds max_prompt_length."""
-        if self.tokenizer is None:
-            raise ValueError("Tokenizer not available for applying chat template")
-        
-        if not hasattr(self.tokenizer, 'apply_chat_template'):
-            raise ValueError("Tokenizer does not support chat templates")
-            
-        # Format the prompt
-        prompt = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-        
-        # Check length if max_prompt_length is specified
-        if hasattr(self.args, 'max_prompt_length') and self.args.max_prompt_length is not None:
-            tokenized = self.tokenizer(prompt, return_tensors="pt")
-            if len(tokenized.input_ids[0]) > self.args.max_prompt_length:
-                return " "
-        
-        return prompt
-            
-    def generate(self, prompts: List[str]) -> List[str]:
-        """Generate responses with batch processing"""
-        # Process in batches with a single progress bar
-        batch_size = self.args.batch_size
-        all_outputs = []
-        
-        for i in range(0, len(prompts), batch_size):
-            batch_prompts = prompts[i:i + batch_size]
-                
-            if self.args.debug:
-                print(f"\nProcessing batch {i//batch_size + 1}/{(len(prompts)-1)//batch_size + 1}")
-                
-            batch_outputs = self.llm.generate(batch_prompts, self.sampling_params)
-            all_outputs.extend([output.outputs[0].text for output in batch_outputs])
-        
-        return all_outputs
+        # Sampling parameters
+        self.sampling_params = {
+            "model": getattr(args, 'model', 'default-model'),
+            "temperature": getattr(args, 'temperature', 0),
+            "top_p": getattr(args, 'top_p', 0.9),
+            "max_tokens": getattr(args, 'max_tokens', 8192),
+            "n": 1
+        }
 
-    def batch_predict(self, dataset: Dataset, args) -> Dataset:
-        """Run batch prediction with either chat template or traditional prompt system"""
-        if args.dataset != "rewardbench_v2_set":
+    def _send_api_request(self, messages: Union[str, List[Dict[str, str]]], retries: int = 10000000000) -> str:
+        """Send a single request to the API endpoint with retry logic
+        
+        Args:
+            messages: Either a string prompt or list of chat messages
+            retries: Number of retry attempts
+            
+        Returns:
+            Generated text response
+        """
+        # Convert string prompt to chat format
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+        
+        # Prepare request data
+        data = {
+            "messages": messages,
+            **self.sampling_params
+        }
+        
+        for attempt in range(retries):
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json=data,
+                )
+                response.raise_for_status()
+                return response.json()["choices"][0]["message"]["content"]
+            except requests.exceptions.RequestException as e:
+                print(f"API request failed (attempt {attempt + 1}/{retries}): {str(e)}")
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    print(f"Failed after {retries} attempts for message: {messages[0]['content'][:50]}...")
+                    return ""
+
+    def _process_batch(self, batch: List[Union[str, List[Dict[str, str]]]]) -> List[str]:
+        """Process a batch of prompts concurrently
+        
+        Args:
+            batch: List of prompts (either strings or chat message lists)
+            
+        Returns:
+            List of generated responses
+        """
+        with ThreadPoolExecutor(max_workers=self.args.batch_size) as executor:
+            futures = []
+            for prompt in batch:
+                futures.append(executor.submit(self._send_api_request, prompt))
+            
+            results = []
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Processing batch of {len(batch)}"):
+                results.append(future.result())
+            return results
+
+    def generate(self, prompts: List[Union[str, List[Dict[str, str]]]]) -> List[str]:
+        """Generate responses for multiple prompts via API with batching
+        
+        Args:
+            prompts: List of prompts (either strings or chat message lists)
+            
+        Returns:
+            List of generated responses
+        """
+        if not hasattr(self.args, 'batch_size') or self.args.batch_size <= 1:
+            # Sequential processing if batch_size is not specified or is 1
+            return [self._send_api_request(prompt) for prompt in tqdm(prompts, desc="Generating responses")]
+        
+        # Process in batches
+        all_results = []
+        for i in tqdm(range(0, len(prompts), self.args.batch_size), desc="Processing batches"):
+            batch = prompts[i:i + self.args.batch_size]
+            batch_results = self._process_batch(batch)
+            all_results.extend(batch_results)
+        
+        return all_results
+
+    def batch_predict(self, dataset: Dataset, args) -> tuple:
+        """Run batch prediction on a dataset using API
+        
+        Args:
+            dataset: HuggingFace Dataset object
+            args: Additional arguments
+            
+        Returns:
+            Tuple of (responses, candidates) where candidates may be None
+        """
+        if getattr(args, 'dataset', None) != "rewardbench_v2_set":
+            # Standard dataset processing
             prompts = []
-            # Optional: Add a progress bar for prompt preparation if dataset is large
             for example in tqdm(dataset, desc="Preparing prompts"):
-                prompt = self.format_chat_prompt(example['messages']) if args.use_chat_template else example['messages']
+                prompt = example['messages'] if getattr(args, 'use_chat_template', False) else example['messages']
                 prompts.append(prompt)
             responses = self.generate(prompts)
-            # responses = self.llm.generate(prompts, sampling_params=self.sampling_params)
             return responses, [None] * len(responses)
         else:
+            # RewardBench v2 specific processing
             prompts_12, prompts_34 = [], []
-            # Optional: Add a progress bar for prompt preparation if dataset is large
             for example in tqdm(dataset, desc="Preparing prompts"):
-                prompt_12 = self.format_chat_prompt(example['messages_12']) if args.use_chat_template else example['messages_12']
-                prompts_12.append(prompt_12)
-                prompt_34 = self.format_chat_prompt(example['messages_34']) if args.use_chat_template else example['messages_34']
-                prompts_34.append(prompt_34)
+                prompts_12.append(example['messages_12'])
+                prompts_34.append(example['messages_34'])
+                
             responses_12 = self.generate(prompts_12)
             responses_34 = self.generate(prompts_34)
+            
             dataset = dataset.add_column('evaluation', responses_12)
             answers_12 = [output_parser(example, args) for example in dataset]
             dataset = dataset.remove_columns('evaluation')
@@ -701,7 +745,7 @@ class vLLMInferenceEngine:
             prompts, candidates = [], []
             for example, ans_12, ans_34 in tqdm(zip(dataset, answers_12, answers_34), 
                                      total=len(dataset), 
-                                     desc="Preparing prompts"):
+                                     desc="Preparing final prompts"):
                 if ans_12 == "A" and ans_34 == "A":
                     message = example['messages_13']
                     candidate = ['1', '3']
@@ -715,29 +759,32 @@ class vLLMInferenceEngine:
                     message = example['messages_24']
                     candidate = ['2', '4']
                 else:
-                    # random
-                    message = "error"
-                    candidate = ['1', '2']
+                    # Fallback for unexpected cases
+                    message = example['messages_13']  # Default to first option
+                    candidate = ['1', '3']
 
-                prompt = self.format_chat_prompt(message) if args.use_chat_template else message
+                prompt = message
                 prompts.append(prompt)
                 candidates.append(candidate)
+            
             responses = self.generate(prompts)
-
             return responses, candidates
-    
-    def batch_predict_ties(self, dataset: Dataset, args) -> Dataset:
-        """Run batch prediction with either chat template or traditional prompt system"""
+
+    def batch_predict_ties(self, dataset: Dataset, args) -> List[List[str]]:
+        """Batch predict for TIES format datasets
+        
+        Args:
+            dataset: HuggingFace Dataset object
+            args: Additional arguments
+            
+        Returns:
+            List of lists of responses for each example
+        """
         all_responses = []
-        # Optional: Add a progress bar for prompt preparation if dataset is large
-        for example in tqdm(dataset, desc="Preparing prompts"):
-            prompts = []
-            for message in example['messages']:
-                prompt = self.format_chat_prompt(message) if args.use_chat_template else message
-                prompts.append(prompt)
+        for example in tqdm(dataset, desc="Processing TIES examples"):
+            prompts = example['messages']
             responses = self.generate(prompts)
             all_responses.append(responses)
-
         return all_responses
 
 import re
@@ -990,8 +1037,12 @@ def setup_argparse() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='LLM Evaluation Pipeline')
     
     # Model arguments
-    parser.add_argument('--model', type=str, required=True,
-                       help='Model name or path for vLLM')
+    parser.add_argument('--model', type=str, default="reasoner",
+                       help='Model name for API call')
+    parser.add_argument('--api_url', type=str, default="https://inf2-reasoner.ngrok.dev/v1/chat/completions",
+                       help='API url for API call')
+    parser.add_argument('--api_key', type=str, default="054200c7937d41ed8db9c7d3aa18e433",
+                       help='API key for API call')
     parser.add_argument('--dataset', type=str, required=True,
                        choices=['inf2_sets', 'rewardbench_v1_set', 'judgebench_gpt_set', 'judgebench_claude_set', 'rm_bench_set', 'rewardbench_v2_set'],
                        help='Different dataset(s)')
@@ -1012,7 +1063,7 @@ def setup_argparse() -> argparse.Namespace:
     # Existing inference parameters
     parser.add_argument('--use_chat_template', type=str, default=True,
                        help='Use the default chat template within the tokenizer')
-    parser.add_argument('--batch_size', type=int, default=5120,
+    parser.add_argument('--batch_size', type=int, default=1024,
                        help='Number of prompts to process in each generation batch')
     parser.add_argument('--max_prompt_length', type=int, default=8192,
                        help='Maximum prompt length')
@@ -1080,8 +1131,8 @@ def main():
             print(f"Debug mode: Limited to {len(ties_dataset)} samples from TIES subset")
         print(f"Debug mode: Limited to {len(dataset)} samples")
 
-    print("Initializing LLM...")
-    engine = vLLMInferenceEngine(args)
+    print("Initializing LLM API ...")
+    engine = APIInferenceEngine(args)
 
     print("Running inference...")
     results, candidates = engine.batch_predict(dataset, args)

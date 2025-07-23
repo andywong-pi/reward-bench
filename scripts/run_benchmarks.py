@@ -12,16 +12,21 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Run all benchmark experiments')
     parser.add_argument('--model', type=str, required=True,
                       help='Model name or path (e.g., Qwen/Qwen3-14B)')
-    parser.add_argument('--prompt_type', type=str, required=True,
-                      choices=['helpsteer3', 'generic_conversational_intellegence'],
-                      help='Prompt type to use for all experiments')
+    parser.add_argument('--model_type', type=str, required=True,
+                      choices=['generative', 'reward'],
+                      help='Type of model (generative or reward)')
+    parser.add_argument('--prompt_type', type=str, default=None,
+                      choices=['helpsteer3', 'generic_conversational_intellegence', None],
+                      help='Prompt type to use for all experiments (not needed for reward models)')
     parser.add_argument('--max_turns', type=int, default=4,
                       help='Maximum turns to be maintained (default: 4)')
+                      
     return parser.parse_args()
 
-def run_experiments(model_name, prompt_type, max_turns):
+def run_experiments(model_name, model_type, prompt_type, max_turns):
     """Run all benchmark experiments sequentially"""
-    base_command = "python inf2_vllm.py"
+    # Choose the appropriate script based on model type
+    base_command = "python inf2_generative.py" if model_type == "generative" else "python inf2_rm.py"
     
     # Define all experiments with their specific parameters
     experiments = [
@@ -67,22 +72,35 @@ def run_experiments(model_name, prompt_type, max_turns):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_safe = model_name.replace("/", "_")
     
+    # Determine output directory name based on model type
+    if model_type == "generative":
+        output_dir_base = f"results/{model_safe}_{prompt_type}_{timestamp}"
+    else:
+        output_dir_base = f"results/{model_safe}_{timestamp}"
+    
     # Run each experiment
     for exp in experiments:
         # Create base directory with dataset name included
-        output_dir = f"results/{model_safe}_{prompt_type}_{timestamp}/{exp['dataset']}"
+        output_dir = f"{output_dir_base}/{exp['dataset']}"
         os.makedirs(output_dir, exist_ok=True)
         
         # Build command with output file path
         output_file = f"{output_dir}/results.json"
-        command = (
-            f"{base_command} --model={model_name} "
-            f"--dataset={exp['dataset']} "
-            f"--prompt_type={prompt_type} "
-            f"--max_turns={max_turns} "
-            f"--output_file={output_file} "
-            f"{exp['extra_args']}"
-        )
+        command_parts = [
+            base_command,
+            f"--model={model_name}",
+            f"--dataset={exp['dataset']}",
+            f"--max_turns={max_turns}",
+            f"--output_file={output_file}",
+            exp["extra_args"]
+        ]
+        
+        # Add prompt_type only for generative models
+        if model_type == "generative":
+            command_parts.insert(3, f"--prompt_type={prompt_type}")
+        
+        # Remove empty strings and join
+        command = " ".join([part for part in command_parts if part])
         
         print(f"Running command: {command}")
         start_time = time.time()
@@ -102,7 +120,7 @@ def run_experiments(model_name, prompt_type, max_turns):
             print(f"Results saved to {output_file}")
     
     print(f"\nAll experiments completed! Results saved in various directories")
-    return f"results/{model_safe}_{prompt_type}_{timestamp}/*"
+    return f"{output_dir_base}/*"
 
 def load_all_results(base_path_pattern="results/*"):
     """Load all result JSON files into a dictionary, keyed by their immediate parent directory"""
@@ -124,11 +142,17 @@ def load_all_results(base_path_pattern="results/*"):
                 all_results[key] = data
     return all_results
 
-def transform_results(input_data, model_name, prompt_type):
+def transform_results(input_data, model_name, prompt_type, model_type):
     all_results = [
         {"model_name": model_name},
-        {"prompt_type": prompt_type}
+        {"model_type": model_type}
     ]
+    
+    # Only add prompt_type if it exists (for generative models)
+    if prompt_type is not None:
+        all_results.append({"prompt_type": prompt_type})
+    else:
+        all_results.append({"prompt_type": "N/A"})
 
     def add_average(results_dict, prefix, keys):
         values = [results_dict[k] for k in keys]
@@ -138,7 +162,8 @@ def transform_results(input_data, model_name, prompt_type):
         if key == "inf2_sets":
             all_results.extend([
                 {"inf2-dpojpi": val['dpojpi_chatml_no_names_llama33i_resample']},
-                {"inf2-validation": val['validation']}
+                {"inf2-validation": val['validation']},
+                {"inf1_eclairselfharm+core+support+justpi": val['annotations_pm_test']}
             ])
         elif key == "rewardbench_v1_set":
             keys = ['Chat', 'Chat Hard', 'Safety', 'Reasoning']
@@ -149,20 +174,21 @@ def transform_results(input_data, model_name, prompt_type):
             all_results.extend([{"rewardbench_v2-" + k: val[k]} for k in keys])
             add_average(val, "rewardbench_v2", keys)
         elif key in ("judgebench_gpt_set", "judgebench_claude_set"):
-            prefix = key.replace("_set", "")
-            benchmarks = [
-                ('mmlu-pro', 'mmlu_pro'),
-                ('livebench-reasoning', 'livebench_reasoning'),
-                ('livebench-math', 'livebench_math'),
-                ('livecodebench', 'livecodebench'),
-                ('', 'overall')
-            ]
-            for bench_key, bench_name in benchmarks:
-                metrics = {
-                    f"{prefix}-{bench_name}-{m}": val[bench_key][f"{m}_ratio"]
-                    for m in ['both_correct', 'both_wrong', 'mixed']
-                }
-                all_results.append(metrics)
+            if model_type == "generative":  # Only process these for generative models
+                prefix = key.replace("_set", "")
+                benchmarks = [
+                    ('mmlu-pro', 'mmlu_pro'),
+                    ('livebench-reasoning', 'livebench_reasoning'),
+                    ('livebench-math', 'livebench_math'),
+                    ('livecodebench', 'livecodebench'),
+                    ('', 'overall')
+                ]
+                for bench_key, bench_name in benchmarks:
+                    metrics = {
+                        f"{prefix}-{bench_name}-{m}": val[bench_key][f"{m}_ratio"]
+                        for m in ['both_correct', 'both_wrong', 'mixed']
+                    }
+                    all_results.append(metrics)
         elif key == "rm_bench_set":
             categories = [
                 'chat', 'code', 'math', 
@@ -206,10 +232,15 @@ def save_csv(combined_file, merged_results):
 def main():
     args = parse_args()
     
+    # Validate prompt_type for generative models
+    if args.model_type == "generative" and args.prompt_type is None:
+        raise ValueError("prompt_type is required for generative models")
+    
     # Run all experiments
     results_dir_pattern = run_experiments(
         model_name=args.model,
-        prompt_type=args.prompt_type,
+        model_type=args.model_type,
+        prompt_type=args.prompt_type if args.model_type == "generative" else None,
         max_turns=args.max_turns
     )
     print(f"results_dir_pattern: {results_dir_pattern}")
@@ -218,7 +249,12 @@ def main():
     combined_results = load_all_results(results_dir_pattern)
 
     # put all of these results into a list of dictionary
-    merged_results = transform_results(combined_results, args.model, args.prompt_type)
+    merged_results = transform_results(
+        combined_results, 
+        args.model, 
+        args.prompt_type if args.model_type == "generative" else None,
+        args.model_type
+    )
 
     # Save combined results
     combined_file = f"results/combined_results.csv"
