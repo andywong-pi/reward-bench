@@ -13,20 +13,29 @@ def parse_args():
     parser.add_argument('--model', type=str, required=True,
                       help='Model name or path (e.g., Qwen/Qwen3-14B)')
     parser.add_argument('--model_type', type=str, required=True,
-                      choices=['generative', 'reward'],
-                      help='Type of model (generative or reward)')
+                      choices=['generative', 'reward', 'generative_openai'],
+                      help='Type of model (generative, generative_openai or reward)')
     parser.add_argument('--prompt_type', type=str, default=None,
                       choices=['helpsteer3', 'generic_conversational_intellegence', None],
                       help='Prompt type to use for all experiments (not needed for reward models)')
     parser.add_argument('--max_turns', type=int, default=4,
                       help='Maximum turns to be maintained (default: 4)')
+    parser.add_argument('--api_url', type=str, default=None,
+                      help='API URL for OpenAI-compatible models (optional)')
+    parser.add_argument('--api_key', type=str, default=None,
+                      help='API key for OpenAI-compatible models (optional)')
                       
     return parser.parse_args()
 
-def run_experiments(model_name, model_type, prompt_type, max_turns):
+def run_experiments(model_name, model_type, prompt_type, max_turns, api_url=None, api_key=None):
     """Run all benchmark experiments sequentially"""
     # Choose the appropriate script based on model type
-    base_command = "python inf2_generative.py" if model_type == "generative" else "python inf2_rm.py"
+    if model_type == "generative":
+        base_command = "python inf2_generative.py"
+    elif model_type == "generative_openai":
+        base_command = "python inf2_generative_openai.py"
+    else:  # reward
+        base_command = "python inf2_rm.py"
     
     # Define all experiments with their specific parameters
     experiments = [
@@ -73,7 +82,7 @@ def run_experiments(model_name, model_type, prompt_type, max_turns):
     model_safe = model_name.replace("/", "_")
     
     # Determine output directory name based on model type
-    if model_type == "generative":
+    if model_type in ["generative", "generative_openai"]:
         output_dir_base = f"results/{model_safe}_{prompt_type}_{timestamp}"
     else:
         output_dir_base = f"results/{model_safe}_{timestamp}"
@@ -96,8 +105,15 @@ def run_experiments(model_name, model_type, prompt_type, max_turns):
         ]
         
         # Add prompt_type only for generative models
-        if model_type == "generative":
+        if model_type in ["generative", "generative_openai"]:
             command_parts.insert(3, f"--prompt_type={prompt_type}")
+        
+        # Add API URL and key if provided (for OpenAI-compatible models)
+        if model_type == "generative_openai":
+            if api_url:
+                command_parts.append(f"--api_url={api_url}")
+            if api_key:
+                command_parts.append(f"--api_key={api_key}")
         
         # Remove empty strings and join
         command = " ".join([part for part in command_parts if part])
@@ -174,21 +190,20 @@ def transform_results(input_data, model_name, prompt_type, model_type):
             all_results.extend([{"rewardbench_v2-" + k: val[k]} for k in keys])
             add_average(val, "rewardbench_v2", keys)
         elif key in ("judgebench_gpt_set", "judgebench_claude_set"):
-            if model_type == "generative":  # Only process these for generative models
-                prefix = key.replace("_set", "")
-                benchmarks = [
-                    ('mmlu-pro', 'mmlu_pro'),
-                    ('livebench-reasoning', 'livebench_reasoning'),
-                    ('livebench-math', 'livebench_math'),
-                    ('livecodebench', 'livecodebench'),
-                    ('', 'overall')
-                ]
-                for bench_key, bench_name in benchmarks:
-                    metrics = {
-                        f"{prefix}-{bench_name}-{m}": val[bench_key][f"{m}_ratio"]
-                        for m in ['both_correct', 'both_wrong', 'mixed']
-                    }
-                    all_results.append(metrics)
+            prefix = key.replace("_set", "")
+            benchmarks = [
+                ('mmlu-pro', 'mmlu_pro'),
+                ('livebench-reasoning', 'livebench_reasoning'),
+                ('livebench-math', 'livebench_math'),
+                ('livecodebench', 'livecodebench'),
+                ('', 'overall')
+            ]
+            for bench_key, bench_name in benchmarks:
+                metrics = {
+                    f"{prefix}-{bench_name}-{m}": val[bench_key][f"{m}_ratio"]
+                    for m in ['both_correct', 'both_wrong', 'mixed']
+                }                    
+                all_results.append(metrics)
         elif key == "rm_bench_set":
             categories = [
                 'chat', 'code', 'math', 
@@ -233,26 +248,30 @@ def main():
     args = parse_args()
     
     # Validate prompt_type for generative models
-    if args.model_type == "generative" and args.prompt_type is None:
+    if args.model_type in ["generative", "generative_openai"] and args.prompt_type is None:
         raise ValueError("prompt_type is required for generative models")
     
     # Run all experiments
     results_dir_pattern = run_experiments(
         model_name=args.model,
         model_type=args.model_type,
-        prompt_type=args.prompt_type if args.model_type == "generative" else None,
-        max_turns=args.max_turns
+        prompt_type=args.prompt_type if args.model_type in ["generative", "generative_openai"] else None,
+        max_turns=args.max_turns,
+        api_url=args.api_url,
+        api_key=args.api_key
     )
     print(f"results_dir_pattern: {results_dir_pattern}")
-
+    
     # Load and concatenate all results
     combined_results = load_all_results(results_dir_pattern)
+
+    #print(combined_results)
 
     # put all of these results into a list of dictionary
     merged_results = transform_results(
         combined_results, 
         args.model, 
-        args.prompt_type if args.model_type == "generative" else None,
+        args.prompt_type if args.model_type in ["generative", "generative_openai"] else None,
         args.model_type
     )
 

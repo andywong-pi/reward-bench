@@ -629,16 +629,8 @@ class APIInferenceEngine:
             "n": 1
         }
 
-    def _send_api_request(self, messages: Union[str, List[Dict[str, str]]], retries: int = 10000000000) -> str:
-        """Send a single request to the API endpoint with retry logic
-        
-        Args:
-            messages: Either a string prompt or list of chat messages
-            retries: Number of retry attempts
-            
-        Returns:
-            Generated text response
-        """
+    def _send_api_request(self, messages: Union[str, List[Dict[str, str]]]) -> str:
+        """Send a single request to the API endpoint with infinite retry logic"""
         # Convert string prompt to chat format
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
@@ -649,7 +641,8 @@ class APIInferenceEngine:
             **self.sampling_params
         }
         
-        for attempt in range(retries):
+        attempt = 0
+        while True:
             try:
                 response = requests.post(
                     self.api_url,
@@ -659,13 +652,10 @@ class APIInferenceEngine:
                 response.raise_for_status()
                 return response.json()["choices"][0]["message"]["content"]
             except requests.exceptions.RequestException as e:
-                print(f"API request failed (attempt {attempt + 1}/{retries}): {str(e)}")
-                if attempt < retries - 1:
-                    time.sleep(2 ** attempt)  # Exponential backoff
-                else:
-                    print(f"Failed after {retries} attempts for message: {messages[0]['content'][:50]}...")
-                    return ""
-
+                attempt += 1
+                print(f"API request failed (attempt {attempt}): {str(e)}")
+                time.sleep(min(2 ** attempt, 60))  # Exponential backoff with max 60 seconds
+                
     def _process_batch(self, batch: List[Union[str, List[Dict[str, str]]]]) -> List[str]:
         """Process a batch of prompts concurrently
         
@@ -703,6 +693,9 @@ class APIInferenceEngine:
         for i in tqdm(range(0, len(prompts), self.args.batch_size), desc="Processing batches"):
             batch = prompts[i:i + self.args.batch_size]
             batch_results = self._process_batch(batch)
+
+            import pdb;pdb.set_trace()
+
             all_results.extend(batch_results)
         
         return all_results
@@ -1063,7 +1056,7 @@ def setup_argparse() -> argparse.Namespace:
     # Existing inference parameters
     parser.add_argument('--use_chat_template', type=str, default=True,
                        help='Use the default chat template within the tokenizer')
-    parser.add_argument('--batch_size', type=int, default=1024,
+    parser.add_argument('--batch_size', type=int, default=64,
                        help='Number of prompts to process in each generation batch')
     parser.add_argument('--max_prompt_length', type=int, default=8192,
                        help='Maximum prompt length')
