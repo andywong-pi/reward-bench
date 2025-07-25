@@ -680,8 +680,6 @@ class vLLMInferenceEngine:
                 prompt = self.format_chat_prompt(example['messages']) if args.use_chat_template else example['messages']
                 prompts.append(prompt)
             responses = self.generate(prompts)
-
-            import pdb;pdb.set_trace()
             
             # responses = self.llm.generate(prompts, sampling_params=self.sampling_params)
             return responses, [None] * len(responses)
@@ -1016,7 +1014,7 @@ def setup_argparse() -> argparse.Namespace:
     # Existing inference parameters
     parser.add_argument('--use_chat_template', type=str, default=True,
                        help='Use the default chat template within the tokenizer')
-    parser.add_argument('--batch_size', type=int, default=128,
+    parser.add_argument('--batch_size', type=int, default=5120,
                        help='Number of prompts to process in each generation batch')
     parser.add_argument('--max_prompt_length', type=int, default=8192,
                        help='Maximum prompt length')
