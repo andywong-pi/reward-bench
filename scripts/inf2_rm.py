@@ -18,10 +18,10 @@ from rewardbench import process_single_model
 from datetime import datetime
 
 INF2_SETS = [
-    "/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
-    "/mnt/vast/home/jimmy/data/inf2/rl/validation.parquet",
-    "/mnt/vast/home/andy/data/inf1_eclairselfharm+core+support+justpi/annotations_pm_test.jsonl"
-
+    #"/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
+    # "/mnt/vast/home/jimmy/data/inf2/rl/validation.parquet",
+    # "/mnt/vast/home/andy/data/inf1_eclairselfharm+core+support+justpi/annotations_pm_test.jsonl",
+    "/mnt/vast/home/jimmy/data/july_2025_justpi_multiturn_test_prolific/annotations_pm_test_july_2025_prolific.jsonl"
 ]
 REWARDBENCH_v1_SET = "allenai/reward-bench"
 JUDGEBENCH_SET = "ScalerLab/JudgeBench"
@@ -891,7 +891,7 @@ def setup_argparse() -> argparse.Namespace:
     
     # New argument to limit maximum examples per dataset
     parser.add_argument('--max_examples', type=int, default=20000,
-                       help='Maximum number of examples to load from each dataset (default: 20000)')
+                       help='Maximum number of examples to load from each dataset (default: 200000)')
     # New argument for specifying complete output file path
     parser.add_argument('--output_file', type=str, default=None,
                        help='Complete path for output JSON file (including filename). '
@@ -899,7 +899,7 @@ def setup_argparse() -> argparse.Namespace:
     
     return parser.parse_args()
 
-def save_results(results, model_name, output_file=None):
+def save_results(results, dataset, model_name, output_file=None):
     """Save evaluation results to a JSON file.
     If output_file is specified, uses that path exactly.
     Otherwise generates a filename automatically in results/ directory."""
@@ -919,9 +919,23 @@ def save_results(results, model_name, output_file=None):
         # Create parent directory if it doesn't exist
         os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
     
+    # Convert dataset to a JSON-serializable format (e.g., dictionary)
+    try:
+        # Assuming dataset is a Hugging Face Dataset object
+        dataset_serializable = dataset.to_dict()  # Convert to dictionary
+    except AttributeError:
+        # If dataset is already a list or dict, use it directly
+        dataset_serializable = dataset if isinstance(dataset, (dict, list)) else list(dataset)
+    
+    # Prepare the data to save
+    data_to_save = {
+        'results': results,
+        'dataset': dataset_serializable
+    }
+    
     # Save results
     with open(filename, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(data_to_save, f, indent=2)
     
     return filename
 
@@ -991,7 +1005,7 @@ def main():
     }
     
     # Save results to file
-    results_file = save_results(return_values, args.model, args.output_file)
+    results_file = save_results(return_values, dataset, args.model, args.output_file)
     print(f"Results saved to {results_file}")
     
     return return_values

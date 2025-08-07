@@ -16,10 +16,14 @@ def parse_args():
                       choices=['generative', 'reward', 'generative_openai'],
                       help='Type of model (generative, generative_openai or reward)')
     parser.add_argument('--prompt_type', type=str, default=None,
-                      choices=['helpsteer3', 'generic_conversational_intellegence', None],
+                      choices=['helpsteer3', 'generic_conversational_intellegence', 'helpsteer3_principles', 'justpi', None],
                       help='Prompt type to use for all experiments (not needed for reward models)')
     parser.add_argument('--max_turns', type=int, default=4,
                       help='Maximum turns to be maintained (default: 4)')
+    parser.add_argument('--majority_vote_runs', type=int, default=None,
+                      help='Number of runs for majority voting')
+    parser.add_argument('--temperature', type=float, default=None,
+                      help='temperature for sampling responses for majority voting')
     parser.add_argument('--api_url', type=str, default=None,
                       help='API URL for OpenAI-compatible models (optional)')
     parser.add_argument('--api_key', type=str, default=None,
@@ -27,7 +31,7 @@ def parse_args():
                       
     return parser.parse_args()
 
-def run_experiments(model_name, model_type, prompt_type, max_turns, api_url=None, api_key=None):
+def run_experiments(model_name, model_type, prompt_type, max_turns, majority_vote_runs=None, temperature=None, api_url=None, api_key=None):
     """Run all benchmark experiments sequentially"""
     # Choose the appropriate script based on model type
     if model_type == "generative":
@@ -83,7 +87,7 @@ def run_experiments(model_name, model_type, prompt_type, max_turns, api_url=None
     
     # Determine output directory name based on model type
     if model_type in ["generative", "generative_openai"]:
-        output_dir_base = f"results/{model_safe}_{prompt_type}_{timestamp}"
+        output_dir_base = f"results/{model_safe}_{prompt_type}_{majority_vote_runs}_{temperature}_{timestamp}"
     else:
         output_dir_base = f"results/{model_safe}_{timestamp}"
     
@@ -107,6 +111,14 @@ def run_experiments(model_name, model_type, prompt_type, max_turns, api_url=None
         # Add prompt_type only for generative models
         if model_type in ["generative", "generative_openai"]:
             command_parts.insert(3, f"--prompt_type={prompt_type}")
+            
+            # Add majority_vote_runs if provided
+            if majority_vote_runs is not None:
+                command_parts.append(f"--majority_vote_runs={majority_vote_runs}")
+                
+            # Add temperature if provided
+            if temperature is not None:
+                command_parts.append(f"--temperature={temperature}")
         
         # Add API URL and key if provided (for OpenAI-compatible models)
         if model_type == "generative_openai":
@@ -145,6 +157,8 @@ def load_all_results(base_path_pattern="results/*"):
         for json_file in glob.glob(f"{base_path}/**/results.json", recursive=True):
             with open(json_file, "r") as f:
                 data = json.load(f)
+                if 'results' in data:
+                    data = data['results']
                 
                 # Get the immediate parent directory name (the key we want)
                 key = os.path.basename(os.path.dirname(json_file))
@@ -158,7 +172,7 @@ def load_all_results(base_path_pattern="results/*"):
                 all_results[key] = data
     return all_results
 
-def transform_results(input_data, model_name, prompt_type, model_type):
+def transform_results(input_data, model_name, prompt_type, model_type, majority_vote_runs=None, temperature=None):
     all_results = [
         {"model_name": model_name},
         {"model_type": model_type}
@@ -169,25 +183,32 @@ def transform_results(input_data, model_name, prompt_type, model_type):
         all_results.append({"prompt_type": prompt_type})
     else:
         all_results.append({"prompt_type": "N/A"})
+        
+    # Add majority_vote_runs and temperature if they exist (for generative models)
+    if majority_vote_runs is not None:
+        all_results.append({"majority_vote_runs": majority_vote_runs})
+    if temperature is not None:
+        all_results.append({"temperature": temperature})
 
     def add_average(results_dict, prefix, keys):
-        values = [results_dict[k] for k in keys]
+        values = [results_dict.get(k, 0) for k in keys]  # Use get() with default 0
         all_results.append({f"{prefix}-Average": sum(values) / len(values)})
 
     for key, val in input_data.items():
         if key == "inf2_sets":
             all_results.extend([
-                {"inf2-dpojpi": val['dpojpi_chatml_no_names_llama33i_resample']},
-                {"inf2-validation": val['validation']},
-                {"inf1_eclairselfharm+core+support+justpi": val['annotations_pm_test']}
+                {"inf2-dpojpi": val.get('dpojpi_chatml_no_names_llama33i_resample', 0)},
+                {"inf2-validation": val.get('validation', 0)},
+                {"inf1_eclairselfharm+core+support+justpi": val.get('annotations_pm_test', 0)},
+                {"july_2025_justpi_multiturn_test_prolific": val.get('annotations_pm_test_july_2025_prolific', 0)}
             ])
         elif key == "rewardbench_v1_set":
             keys = ['Chat', 'Chat Hard', 'Safety', 'Reasoning']
-            all_results.extend([{"rewardbench_v1-" + k: val[k]} for k in keys])
+            all_results.extend([{"rewardbench_v1-" + k: val.get(k, 0)} for k in keys])
             add_average(val, "rewardbench_v1", keys)
         elif key == "rewardbench_v2_set":
             keys = ['Factuality', 'Focus', 'Math', 'Precise IF', 'Safety', 'TIES']
-            all_results.extend([{"rewardbench_v2-" + k: val[k]} for k in keys])
+            all_results.extend([{"rewardbench_v2-" + k: val.get(k, 0)} for k in keys])
             add_average(val, "rewardbench_v2", keys)
         elif key in ("judgebench_gpt_set", "judgebench_claude_set"):
             prefix = key.replace("_set", "")
@@ -199,10 +220,11 @@ def transform_results(input_data, model_name, prompt_type, model_type):
                 ('', 'overall')
             ]
             for bench_key, bench_name in benchmarks:
+                bench_data = val.get(bench_key, {})  # Default to empty dict if key missing
                 metrics = {
-                    f"{prefix}-{bench_name}-{m}": val[bench_key][f"{m}_ratio"]
+                    f"{prefix}-{bench_name}-{m}": bench_data.get(f"{m}_ratio", 0)
                     for m in ['both_correct', 'both_wrong', 'mixed']
-                }                    
+                }
                 all_results.append(metrics)
         elif key == "rm_bench_set":
             categories = [
@@ -210,8 +232,9 @@ def transform_results(input_data, model_name, prompt_type, model_type):
                 'safety-refuse', 'safety-response', 'overall'
             ]
             for cat in categories:
+                cat_data = val.get(cat, {})  # Default to empty dict if category missing
                 metrics = {
-                    f"rm_bench_set-{cat}-{level}": val[cat][level]['accuracy']
+                    f"rm_bench_set-{cat}-{level}": cat_data.get(level, {}).get('accuracy', 0)
                     for level in ['hard', 'normal', 'easy']
                 }
                 all_results.append(metrics)
@@ -257,6 +280,8 @@ def main():
         model_type=args.model_type,
         prompt_type=args.prompt_type if args.model_type in ["generative", "generative_openai"] else None,
         max_turns=args.max_turns,
+        majority_vote_runs=args.majority_vote_runs if args.model_type in ["generative", "generative_openai"] else None,
+        temperature=args.temperature if args.model_type in ["generative", "generative_openai"] else None,
         api_url=args.api_url,
         api_key=args.api_key
     )
@@ -265,14 +290,14 @@ def main():
     # Load and concatenate all results
     combined_results = load_all_results(results_dir_pattern)
 
-    #print(combined_results)
-
     # put all of these results into a list of dictionary
     merged_results = transform_results(
         combined_results, 
         args.model, 
         args.prompt_type if args.model_type in ["generative", "generative_openai"] else None,
-        args.model_type
+        args.model_type,
+        args.majority_vote_runs if args.model_type in ["generative", "generative_openai"] else None,
+        args.temperature if args.model_type in ["generative", "generative_openai"] else None
     )
 
     # Save combined results

@@ -16,9 +16,14 @@ from rewardbench.utils import calculate_scores_per_section
 from itertools import product
 from rewardbench import process_single_model
 from datetime import datetime
+import requests
+import time
+from transformers import AutoTokenizer
+
+
 
 INF2_SETS = [
-    # "/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
+    #"/mnt/vast/home/sanjana/dpo_data/dpojpi_chatml_no_names_llama33i_resample.jsonl",
     # "/mnt/vast/home/jimmy/data/inf2/rl/validation.parquet",
     # "/mnt/vast/home/andy/data/inf1_eclairselfharm+core+support+justpi/annotations_pm_test.jsonl",
     "/mnt/vast/home/jimmy/data/july_2025_justpi_multiturn_test_prolific/annotations_pm_test_july_2025_prolific.jsonl"
@@ -399,7 +404,7 @@ def apply_prompt_templates(example, args) -> dict:
         user_prompt_template = HELPSTEER3_USER_PROMPT
     elif args.prompt_type == "helpsteer3_principles":
         system_prompt = HELPSTEER3_PRINCIPLES_SYSTEM_PROMPT
-        user_prompt_template = HELPSTEER3_PRINCIPLES_USER_PROMPT
+        user_prompt_template = HELPSTEER3_PRINCIPLES_USER_PROMPT        
     elif args.prompt_type == "generic_conversational_intellegence":
         system_prompt = GENERIC_CONVERSATIONAL_INTELLIGENCE_SYSTEM_PROMPT
         user_prompt_template = GENERIC_CONVERSATIONAL_INTELLIGENCE_USER_PROMPT
@@ -690,121 +695,138 @@ def load_datasets(args) -> Tuple[Dataset, List[str]]:
         return dataset, subsets, ties_dataset
     return dataset, subsets
 
-import requests
-from tqdm import tqdm
-from typing import List, Dict, Optional, Union, Any
-from datasets import Dataset
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
-
-class APIInferenceEngine:
+class TogetherAIInferenceEngine:
     def __init__(self, args):
-        """Initialize API-based inference engine
-        
-        Args:
-            args: Should contain:
-                - api_url: URL of the API endpoint
-                - api_key: API key (optional)
-                - model: Model name to use
-                - temperature: Sampling temperature
-                - top_p: Top-p sampling value
-                - max_tokens: Maximum tokens to generate
-                - batch_size: Number of concurrent requests to make
-        """
+        """Initialize Together AI inference engine"""
         self.args = args
         
-        # Validate required arguments
-        if not hasattr(args, 'api_url'):
-            raise ValueError("api_url must be provided for API inference")
+        # Verify API key is provided
+        if not hasattr(args, 'together_api_key') or not args.together_api_key:
+            raise RuntimeError("Together API key is required. Set args.together_api_key.")
+            
+        self.api_key = args.together_api_key
+        self.api_url = "https://api.together.xyz/v1/completions"
         
-        # API configuration
-        self.api_url = args.api_url
-        self.api_key = getattr(args, 'api_key', None)
-        
-        # Set up headers
-        self.headers = {
-            "Content-Type": "application/json",
-        }
-        if self.api_key:
-            self.headers["Authorization"] = f"Bearer {self.api_key}"
-        
-        # Sampling parameters
-        self.sampling_params = {
-            "model": getattr(args, 'model', 'default-model'),
-            "temperature": getattr(args, 'temperature', 0),
-            "top_p": getattr(args, 'top_p', 0.9),
-            "max_tokens": getattr(args, 'max_tokens', 8192),
-            "n": 1
-        }
-
-    def _send_api_request(self, messages: Union[str, List[Dict[str, str]]]) -> str:
-        """Send a single request to the API endpoint with infinite retry logic"""
-        # Convert string prompt to chat format
-        if isinstance(messages, str):
-            messages = [{"role": "user", "content": messages}]
-        
-        # Prepare request data
-        data = {
-            "messages": messages,
-            **self.sampling_params
+        # Setup tokenizer for chat templating if needed
+        if hasattr(args, 'use_chat_template') and args.use_chat_template:
+            tokenizer_name = args.tokenizer if hasattr(args, 'tokenizer') else args.model
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+        else:
+            self.tokenizer = None
+            
+        # Configure generation parameters
+        self.generation_params = {
+            "max_tokens": args.max_tokens,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "stop": getattr(args, 'stop_tokens', []),
         }
         
-        attempt = 0
-        while True:
-            try:
-                response = requests.post(
-                    self.api_url,
-                    headers=self.headers,
-                    json=data,
-                )
-                response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"]
-            except requests.exceptions.RequestException as e:
-                attempt += 1
-                print(f"API request failed (attempt {attempt}): {str(e)}")
-                time.sleep(min(2 ** attempt, 60))  # Exponential backoff with max 60 seconds
-                
-    def _process_batch(self, batch: List[Union[str, List[Dict[str, str]]]]) -> List[str]:
-        """Process a batch of prompts concurrently
-        
-        Args:
-            batch: List of prompts (either strings or chat message lists)
-            
-        Returns:
-            List of generated responses
-        """
-        with ThreadPoolExecutor(max_workers=self.args.batch_size) as executor:
-            futures = []
-            for prompt in batch:
-                futures.append(executor.submit(self._send_api_request, prompt))
-            
-            results = []
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Processing batch of {len(batch)}"):
-                results.append(future.result())
-            return results
+        print(f"Initialized Together AI engine for model: {args.model}")
 
-    def generate(self, prompts: List[Union[str, List[Dict[str, str]]]]) -> List[str]:
-        """Generate responses for multiple prompts via API with batching
+    def format_chat_prompt(self, messages: List[dict]) -> Optional[str]:
+        """Format messages using chat template"""
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer not available for applying chat template")
         
-        Args:
-            prompts: List of prompts (either strings or chat message lists)
+        if not hasattr(self.tokenizer, 'apply_chat_template'):
+            raise ValueError("Tokenizer does not support chat templates")
             
-        Returns:
-            List of generated responses
-        """
-        if not hasattr(self.args, 'batch_size') or self.args.batch_size <= 1:
-            # Sequential processing if batch_size is not specified or is 1
-            return [self._send_api_request(prompt) for prompt in tqdm(prompts, desc="Generating responses")]
+        prompt = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
         
-        # Process in batches
-        all_results = []
-        for i in tqdm(range(0, len(prompts), self.args.batch_size), desc="Processing batches"):
-            batch = prompts[i:i + self.args.batch_size]
-            batch_results = self._process_batch(batch)
-
-            all_results.extend(batch_results)
+        if hasattr(self.args, 'max_prompt_length') and self.args.max_prompt_length is not None:
+            tokenized = self.tokenizer(prompt, return_tensors="pt")
+            if len(tokenized.input_ids[0]) > self.args.max_prompt_length:
+                return " "
         
-        return all_results
+        return prompt
+            
+    def generate(self, prompts: List[str]) -> List[str]:
+        """Generate completions via Together AI API"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        results = []
+        
+        # Process prompts individually since Together AI completions endpoint 
+        # expects a single prompt string, not a batch
+        for i, prompt in enumerate(tqdm(prompts, desc="Generating responses", disable=not self.args.debug)):
+            
+            payload = {
+                "model": self.args.model,
+                "prompt": prompt,  # Single string, not a list
+                **self.generation_params
+            }
+            
+            success = False
+            for attempt in range(3):
+                try:
+                    response = requests.post(
+                        self.api_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=60
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    # Handle single response
+                    if isinstance(result, dict) and 'choices' in result and len(result['choices']) > 0:
+                        generated_text = result['choices'][0]['text'].strip()
+                        results.append(generated_text)
+                        success = True
+                        if self.args.debug:
+                            print(f"Successfully generated response for prompt {i+1}")
+                        break
+                    else:
+                        print(f"Unexpected response format for prompt {i+1}: {result}")
+                        results.append("")
+                        success = True
+                        break
+                        
+                except requests.exceptions.HTTPError as e:
+                    print(f"Attempt {attempt + 1} failed for prompt {i+1}: {prompt[:50]}...")
+                    print(f"HTTP Error: {str(e)}")
+                    
+                    # Try to get more detailed error information
+                    if hasattr(e, 'response') and e.response is not None:
+                        try:
+                            error_detail = e.response.json()
+                            print(f"Error details: {json.dumps(error_detail, indent=2)}")
+                        except:
+                            print(f"Response text: {e.response.text}")
+                    
+                    if attempt == 2:
+                        print(f"Final failure for prompt {i+1}")
+                        results.append("")  # Add empty result for failed prompt
+                    else:
+                        time.sleep(2**attempt)  # Exponential backoff
+                        
+                except requests.exceptions.RequestException as e:
+                    print(f"Request error on attempt {attempt + 1} for prompt {i+1}: {str(e)}")
+                    if attempt == 2:
+                        results.append("")  # Add empty result for failed prompt
+                    else:
+                        time.sleep(2**attempt)
+                        
+                except Exception as e:
+                    print(f"Unexpected error on attempt {attempt + 1} for prompt {i+1}: {str(e)}")
+                    if attempt == 2:
+                        results.append("")  # Add empty result for failed prompt
+                    else:
+                        time.sleep(2**attempt)
+            
+            # Add a small delay between requests to be respectful to the API
+            if i < len(prompts) - 1:  # Don't delay after the last request
+                time.sleep(0.1)
+        
+        return results
 
     def batch_predict(self, dataset: Dataset, args) -> Dataset:
         """Run batch prediction with either chat template or traditional prompt system"""
@@ -837,20 +859,23 @@ class APIInferenceEngine:
                     prompt_12 = self.format_chat_prompt(example['messages_12']) if args.use_chat_template else example['messages_12']
                     prompts_12.append(prompt_12)
                     prompt_34 = self.format_chat_prompt(example['messages_34']) if args.use_chat_template else example['messages_34']
-                    prompts_34.append(prompt_34)
+                    prompts_34.append(prompt_34)                
                 responses_12 = self.generate(prompts_12)
                 responses_34 = self.generate(prompts_34)
+                responses_12 = [[response] for response in responses_12]
+                responses_34 = [[response] for response in responses_34]
                 dataset = dataset.add_column('evaluation', responses_12)
-                answers_12 = [output_parser(example, args) for example in dataset]
+                answers_12 = [output_parser(example, args) for example in dataset]                
                 dataset = dataset.remove_columns('evaluation')
                 dataset = dataset.add_column('evaluation', responses_34)
                 answers_34 = [output_parser(example, args) for example in dataset]
                 dataset = dataset.remove_columns('evaluation')
 
                 prompts, candidates = [], []
-                for example, ans_12, ans_34 in tqdm(zip(dataset, answers_12, answers_34), 
+                for example, ans_12s, ans_34s in tqdm(zip(dataset, answers_12, answers_34), 
                                                 total=len(dataset), 
                                                 desc=f"Preparing final prompts (Run {run+1}/{args.majority_vote_runs})"):
+                    ans_12, ans_34 = ans_12s[0], ans_34s[0]
                     if ans_12 == "A" and ans_34 == "A":
                         message = example['messages_13']
                         candidate = ['1', '3']
@@ -876,15 +901,10 @@ class APIInferenceEngine:
                 all_run_candidates.append(candidates)
 
             # Transpose results so each example has a list of responses
-            all_run_results_12 = list(map(list, zip(*all_run_results_12)))
-            all_run_results_34 = list(map(list, zip(*all_run_results_34)))
             all_run_results_final = list(map(list, zip(*all_run_results_final)))
             all_run_candidates = list(map(list, zip(*all_run_candidates)))
-            # Combine results for final processing
-            final_results = []
-            for r12, r34, rf, cand in zip(all_run_results_12, all_run_results_34, all_run_results_final, all_run_candidates):
-                final_results.append([r12, r34, rf])
-            return final_results, all_run_candidates
+
+            return all_run_results_final, all_run_candidates
 
     def batch_predict_ties(self, dataset: Dataset, args) -> Dataset:
         """Run batch prediction with either chat template or traditional prompt system"""
@@ -899,10 +919,12 @@ class APIInferenceEngine:
                     prompt = self.format_chat_prompt(message) if args.use_chat_template else message
                     prompts.append(prompt)
                 responses = self.generate(prompts)
+                responses = [response for response in responses]
                 run_responses.append(responses)
             all_run_results.append(run_responses)
         # Transpose results so each example has a list of responses for each answer
         all_run_results = list(map(list, zip(*all_run_results)))
+
         return all_run_results
 
 import re
@@ -932,7 +954,7 @@ def output_parser(example, args):
 
         # Process each run's judgment
         scores = []
-        for j in judgment:
+        for index, j in enumerate(judgment):
             pattern = re.compile(r"\\?\[The Begin of Ranking Score\\?\](.*?)\\?\[The End of Ranking Score\\?\]", re.DOTALL)
             match = re.search(pattern, j)
             if not match:
@@ -948,7 +970,7 @@ def output_parser(example, args):
                 score = int(extracted_score)
                 # Check dataset and candidates key before accessing
                 if args.dataset == "rewardbench_v2_set" and 'candidates' in example:
-                    candidate = example['candidates'][0] if score <= 3 else example['candidates'][1]
+                    candidate = example['candidates'][index][0] if score <= 3 else example['candidates'][index][1]
                 else:
                     candidate = "A" if score <= 3 else "B"
                 scores.append(candidate)
@@ -964,6 +986,7 @@ def output_parser(example, args):
         return [majority] * len(judgment)  # Return list with majority vote repeated
 
     elif subset != 'Ties' and prompt_type in ["justpi"]:
+        vote_counts = Counter(valid_scores)
         def get_overall_score(input_string):
             try:
                 data = json.loads(input_string)
@@ -1009,6 +1032,7 @@ def output_parser(example, args):
     elif subset == 'Ties' and prompt_type in ["helpsteer3", "helpsteer3_principles", "generic_conversational_intellegence", "justpi"]:
         # Process TIES dataset
         all_run_scores = []
+       
         for run_judgments in judgment:  # Each run_judgments is a list of responses for the 4 answers
             run_scores = []
             for j in run_judgments:
@@ -1016,11 +1040,14 @@ def output_parser(example, args):
                 if match:
                     try:
                         rating = int(match.group(1))
-                        run_scores.append(rating if 1 <= rating <= 10 else "error")
+                        #run_scores.append(rating if 1 <= rating <= 10 else "error")
+                        run_scores.append(rating if 1 <= rating <= 10 else 1) # if error, set to 1 (the worst score)
                     except ValueError:
-                        run_scores.append("error")
+                        #run_scores.append("error")
+                        run_scores.append(1) # if error, set to 1 (the worst score)
                 else:
-                    run_scores.append("error")
+                    #run_scores.append("error")
+                    run_scores.append(1) # if error, set to 1 (the worst score) 
             all_run_scores.append(run_scores)
         
         # Transpose to get scores per answer across runs
@@ -1231,12 +1258,8 @@ def setup_argparse() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='LLM Evaluation Pipeline')
     
     # Model arguments
-    parser.add_argument('--model', type=str, default="reasoner",
-                       help='Model name for API call')
-    parser.add_argument('--api_url', type=str, default="https://inf2-reasoner.ngrok.dev/v1/chat/completions",
-                       help='API url for API call')
-    parser.add_argument('--api_key', type=str, default="054200c7937d41ed8db9c7d3aa18e433",
-                       help='API key for API call')
+    parser.add_argument('--model', type=str, required=True,
+                       help='Model name or path for vLLM')
     parser.add_argument('--dataset', type=str, required=True,
                        choices=['inf2_sets', 'rewardbench_v1_set', 'judgebench_gpt_set', 'judgebench_claude_set', 'rm_bench_set', 'rewardbench_v2_set'],
                        help='Different dataset(s)')
@@ -1257,7 +1280,7 @@ def setup_argparse() -> argparse.Namespace:
     # Existing inference parameters
     parser.add_argument('--use_chat_template', type=str, default=True,
                        help='Use the default chat template within the tokenizer')
-    parser.add_argument('--batch_size', type=int, default=64,
+    parser.add_argument('--batch_size', type=int, default=5120,
                        help='Number of prompts to process in each generation batch')
     parser.add_argument('--max_prompt_length', type=int, default=8192,
                        help='Maximum prompt length')
@@ -1359,11 +1382,12 @@ def main():
             print(f"Debug mode: Limited to {len(ties_dataset)} samples from TIES subset")
         print(f"Debug mode: Limited to {len(dataset)} samples")
 
-    print("Initializing LLM API ...")
-    engine = APIInferenceEngine(args)
+    print("Initializing LLM...")
+    engine = TogetherAIInferenceEngine(args)
 
     print("Running inference...")
     results, candidates = engine.batch_predict(dataset, args)
+
     dataset = dataset.add_column('evaluation', results)
     if args.dataset == "rewardbench_v2_set":
         dataset = dataset.add_column('candidates', candidates)
@@ -1373,6 +1397,7 @@ def main():
         ties_dataset = ties_dataset.add_column('evaluation', ties_results)
 
     print("Parsing results...")
+    
     answers = [output_parser(example, args) for example in dataset]
     dataset = dataset.add_column('answers', answers)
     if args.dataset == "rewardbench_v2_set":
@@ -1394,7 +1419,6 @@ def main():
         'dataset': args.dataset,
         "majority_vote_runs": args.majority_vote_runs,
         'prompt_type': args.prompt_type,
-
         'timestamp': datetime.now().isoformat()
     }
     
